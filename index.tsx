@@ -20,8 +20,8 @@ import './css/charts.css';
 import './css/forms.css';
 import './css/modals.css';
 
-import { state, AppState } from './state';
-import { loadState, persistStateLocally, registerSyncHandler, saveState } from './services/persistence';
+import { state } from './state';
+import { loadState, registerSyncHandler, saveState } from './services/persistence';
 import { renderApp, initI18n, updateUIText } from './render';
 import { setupEventListeners } from './listeners';
 import { handleDayTransition, performArchivalCheck } from './services/habitActions';
@@ -68,21 +68,21 @@ const registerServiceWorker = () => {
 
 async function loadInitialState() {
     // 1. CARREGAMENTO IMEDIATO (Local-First)
+    // Carregamos do IndexedDB primeiro para ter um estado base para comparação
     await loadState();
 
-    // 2. SINCRONIZAÇÃO SILENCIOSA (Background)
+    // 2. SINCRONIZAÇÃO PROATIVA (Background)
+    // fetchStateFromCloud agora cuida da comparação de timestamps e decide se faz Push ou Pull
     if (hasLocalSyncKey()) {
         fetchStateFromCloud().catch(e => {
-            console.warn("Silent sync failed (offline?):", e);
+            console.warn("Proactive boot sync check failed (offline?):", e);
+            // Se falhar no boot mas tivermos chave, marcamos como erro mas mantemos local
             setSyncStatus('syncError');
         });
     }
 }
 
 function handleFirstTimeUser() {
-    // ZERO STATE POLICY: No automatic habits.
-    // If the user hasn't onboarded yet, we just set the flag to true.
-    // This distinguishes a new user from someone who manually deleted all habits.
     if (!state.hasOnboarded) {
         state.hasOnboarded = true;
         saveState();

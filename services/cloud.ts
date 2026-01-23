@@ -60,7 +60,6 @@ export function runWorkerTask<T>(type: 'encrypt' | 'decrypt' | 'build-ai-prompt'
     });
 }
 
-// @fix: Added missing addSyncLog function export to resolve import error in habitActions.ts
 export function addSyncLog(msg: string, type: 'success' | 'error' | 'info' = 'info', icon?: string) {
     if (!state.syncLogs) state.syncLogs = [];
     state.syncLogs.push({
@@ -69,7 +68,6 @@ export function addSyncLog(msg: string, type: 'success' | 'error' | 'info' = 'in
         type,
         icon
     });
-    // Keep logs reasonable size
     if (state.syncLogs.length > 50) {
         state.syncLogs.shift();
     }
@@ -174,18 +172,48 @@ export async function fetchStateFromCloud(): Promise<AppState | undefined> {
 
     try {
         const response = await apiFetch('/api/sync', {}, true);
+        if (response.status === 304) {
+            setSyncStatus('syncSynced');
+            return undefined;
+        }
         if (!response.ok) throw new Error("Fetch failed");
 
         let data = await response.json();
-        // REPAIR: Trata casos onde o servidor envia string JSON em vez de objeto
         if (typeof data === 'string') data = JSON.parse(data);
 
+        const localState = getPersistableState();
+
         if (data && data.state) {
-            const appState = await runWorkerTask<AppState>('decrypt', data.state, syncKey);
+            const remoteLastModified = data.lastModified || 0;
+            const localLastModified = localState.lastModified || 0;
+
+            // PROACTIVE BOOT SYNC:
+            // Se o local for mais novo, empurra imediatamente para a nuvem
+            if (localLastModified > remoteLastModified) {
+                console.log("[Sync] Boot check: Local is newer than Cloud. Pushing updates.");
+                syncStateWithCloud(localState, true);
+                return undefined;
+            }
+
+            // Se o remoto for mais novo, baixa e faz merge
+            const remoteState = await runWorkerTask<AppState>('decrypt', data.state, syncKey);
+            
+            if (remoteLastModified > localLastModified) {
+                console.log("[Sync] Boot check: Cloud is newer than Local. Merging data.");
+                const mergedState = await mergeStates(localState, remoteState);
+                await persistStateLocally(mergedState, true); 
+                await loadState(mergedState);
+                renderApp();
+            }
+
             setSyncStatus('syncSynced');
-            return appState;
+            return remoteState;
         } else {
-            if (state.habits.length > 0) syncStateWithCloud(getPersistableState(), true);
+            // Nuvem vazia, mas temos dados locais? Empurra no boot.
+            if (state.habits.length > 0) {
+                console.log("[Sync] Boot check: Cloud empty. Initializing with local data.");
+                syncStateWithCloud(localState, true);
+            }
             setSyncStatus('syncSynced');
             return undefined;
         }
