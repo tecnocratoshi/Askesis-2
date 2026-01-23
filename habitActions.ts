@@ -20,7 +20,8 @@ import { saveState, loadState, clearLocalPersistence } from './services/persiste
 import { PREDEFINED_HABITS } from './data/predefinedHabits';
 import { 
     getEffectiveScheduleForHabitOnDate, clearSelectorInternalCaches,
-    calculateHabitStreak, shouldHabitAppearOnDate, getHabitDisplayInfo
+    calculateHabitStreak, shouldHabitAppearOnDate, getHabitDisplayInfo,
+    getScheduleForDate
 } from './services/selectors';
 import { 
     generateUUID, getTodayUTCIso, parseUTCIsoDate, triggerHaptic,

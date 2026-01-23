@@ -95,8 +95,11 @@ const _handleEnableSync = () => {
     }
 };
 
-const _handleStatusClick = () => {
+const _handleStatusClick = (e: MouseEvent) => {
+    // IMPORTANTE: Só permite abrir o log se o sync estiver habilitado
     if (!hasLocalSyncKey()) return;
+    e.preventDefault();
+    e.stopPropagation();
     triggerHaptic('light');
     openSyncDebugModal();
 };
@@ -121,7 +124,7 @@ export function initSync() {
     if (ui.viewKeyBtn) ui.viewKeyBtn.addEventListener('click', _handleViewKey);
     if (ui.disableSyncBtn) ui.disableSyncBtn.addEventListener('click', _handleDisableSync);
     if (ui.syncStatus) {
-        ui.syncStatus.style.cursor = 'pointer';
+        // Redundância removida: o estilo de cursor pointer agora está no CSS
         ui.syncStatus.addEventListener('click', _handleStatusClick);
     }
     _refreshViewState();

@@ -29,7 +29,25 @@
         .initial-loader svg { width: 48px; height: 48px; animation: spin 1s linear infinite; stroke: #737373; }
         .d-none { display: none !important; }
         @keyframes spin { to { transform: rotate(360deg); } }
-        #sync-status:hover { text-decoration: underline; color: var(--accent-blue); }
+        
+        /* Link styling for sync status */
+        #sync-status { 
+            transition: color 0.2s, opacity 0.2s; 
+            cursor: pointer;
+            text-decoration: none;
+            display: inline-block;
+        }
+        #sync-status:not(:empty) {
+            color: var(--accent-blue);
+            font-weight: 500;
+        }
+        #sync-status:hover { 
+            text-decoration: underline;
+            opacity: 0.8;
+        }
+        #sync-status:active {
+            opacity: 0.5;
+        }
     </style>
     <script src="https://cdn.onesignal.com/sdks/web/v16/OneSignalSDK.page.js" async></script>
     <script>
@@ -82,7 +100,7 @@
       (function() {
           var errorDisplayed = false;
           function getUI() { return { loader: document.getElementById('initial-loader'), spinner: document.getElementById('loader-spinner'), errUi: document.getElementById('fatal-error-ui'), errTitle: document.getElementById('error-title'), errMsg: document.getElementById('error-message') }; }
-          window.showFatalError = function(msg, isWatchdog) { if (errorDisplayed) return; errorDisplayed = true; var ui = getUI(); if (!ui.loader || !ui.loader.isConnected) { if (!isWatchdog) alert("Erro Crítico: " + msg); return; } if (ui.loader) { if (ui.spinner) ui.spinner.style.display = 'none'; if (ui.errUi) { if (ui.errTitle) ui.errTitle.textContent = isWatchdog ? 'Tempo Excedido' : 'Falha Crítica'; if (ui.errMsg) ui.errMsg.textContent = msg || 'Erro interno.'; ui.errUi.classList.remove('d-none'); } ui.loader.classList.remove('hidden'); } };
+          window.showFatalError = function(msg, isWatchdog) { if (errorDisplayed) return; errorDisplayed = true; var ui = getUI(); if (!ui.loader || !ui.loader.isConnected) { if (!isWatchdog) alert("Erro Crítico: " + msg); return; } if (ui.loader) { if (ui.spinner) ui.spinner.style.display = 'none'; if (ui.errUi) { if (ui.errTitle) ui.errTitle.textContent = isWatchdog ? 'Tempo Excedido' : 'Falha Crítica'; if (ui.errMsg) ui.errTitle.textContent = msg || 'Erro interno.'; ui.errUi.classList.remove('d-none'); } ui.loader.classList.remove('hidden'); } };
           window.onerror = function(message, source, lineno, colno, error) { var msg = message || (error && error.message) || ""; if (typeof msg === 'string' && (msg.indexOf('OneSignal') !== -1 || msg.indexOf('onesignal') !== -1)) return true; if (typeof msg === 'string' && msg.includes('ResizeObserver loop')) return true; window.showFatalError(msg); return false; };
           window.onunhandledrejection = function(event) { var reason = event.reason; var msg = 'Erro Assíncrono: ' + (reason ? (reason.message || reason) : 'Desconhecido'); if (typeof msg === 'string' && (msg.indexOf('OneSignal') !== -1 || msg.indexOf('onesignal') !== -1)) return; window.showFatalError(msg); };
           window.bootWatchdog = setTimeout(function() { var ui = getUI(); if (ui.loader && ui.loader.isConnected && !ui.loader.classList.contains('hidden')) window.showFatalError("O aplicativo demorou muito para responder.", true); }, 8000);
@@ -140,7 +158,7 @@
                     <div class="setting-item"><label id="label-language">Idioma</label><div id="language-rotary" class="reel-rotary"><button id="language-prev" class="reel-btn"><svg width="16" height="16"><use href="#icon-chevron-left"></use></svg></button><div id="language-viewport" class="reel-viewport"><div id="language-reel" class="reel-reel"></div></div><button id="language-next" class="reel-btn"><svg width="16" height="16"><use href="#icon-chevron-right"></use></svg></button></div></div>
                     <div class="setting-item setting-item--column"><div class="setting-item"><label for="notification-toggle" id="label-notifications">Notificações</label><label class="toggle-switch" for="notification-toggle" id="notification-toggle-label"><input type="checkbox" id="notification-toggle"><span class="slider"></span></label></div><p id="notification-status-desc" class="setting-item-desc"></p></div>
                      <div class="setting-item setting-item--column">
-                        <div class="setting-item-header"><label id="label-sync">Sincronização na Nuvem</label><span id="sync-status"></span></div>
+                        <div class="setting-item-header"><label id="label-sync">Sincronização na Nuvem</label><span id="sync-status" aria-haspopup="dialog"></span></div>
                         <p id="sync-error-msg" class="form-notice hidden" style="margin-top:0; margin-bottom:10px;"></p>
                         <div id="sync-section">
                             <div class="sync-view" id="sync-inactive-view"><p id="sync-inactive-desc"></p><div class="sync-actions"><button id="enable-sync-btn" class="btn btn--primary"></button><button id="enter-key-view-btn" class="btn"></button></div></div>
@@ -177,17 +195,18 @@
                 <div class="modal-header-spacer"></div>
             </div>
             <style>
-                #sync-logs-list { list-style: none; padding: 0; font-family: monospace; font-size: 11px; max-height: 400px; overflow-y: auto; }
+                #sync-logs-list { list-style: none; padding: 0; font-family: monospace; font-size: 11px; max-height: 400px; overflow-y: auto; background: #0a0a0a; border: 1px solid var(--border-color); border-radius: var(--border-radius-base); }
                 .sync-log-entry { padding: 8px; border-bottom: 1px solid var(--border-color); line-height: 1.4; display: flex; gap: 8px; }
+                .sync-log-entry:last-child { border-bottom: none; }
                 .log-time { color: var(--text-tertiary); flex-shrink: 0; }
-                .log-msg { color: var(--text-secondary); }
+                .log-msg { color: var(--text-secondary); word-break: break-all; }
                 .sync-log-entry.success .log-msg { color: var(--accent-green); }
                 .sync-log-entry.error .log-msg { color: var(--color-red); }
                 .sync-log-entry.info .log-msg { color: var(--accent-blue); }
             </style>
             <ul id="sync-logs-list"></ul>
             <div class="modal-actions">
-                <button onclick="document.getElementById('sync-debug-modal').classList.remove('visible')" class="btn btn--primary">Fechar</button>
+                <button onclick="const m=document.getElementById('sync-debug-modal'); m.classList.remove('visible'); document.querySelector('.app-container').removeAttribute('inert');" class="btn btn--primary">Fechar</button>
             </div>
         </div>
     </div>
