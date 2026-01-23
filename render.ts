@@ -25,7 +25,8 @@ import { parseUTCIsoDate, toUTCIsoDateString, addDays, pushToOneSignal, getToday
 import { ui } from './render/ui';
 import { t, setLanguage, formatDate } from './i18n'; 
 import { UI_ICONS } from './render/icons';
-import { STOIC_QUOTES, type Quote } from './data/quotes';
+import type { Quote } from './data/quotes';
+import { checkAndAnalyzeDayContext } from './habitActions';
 import { selectBestQuote } from './services/quoteEngine'; // NEW: Import Engine
 import { calculateDaySummary } from './services/selectors';
 
@@ -50,6 +51,9 @@ let _lastTitleLang: string | null = null;
 // Armazena: { id: "quote_id", contextKey: "morning|triumph" }
 // Se o contexto mudar (ex: virou noite, ou completou tudo), re-renderiza.
 let _cachedQuoteState: { id: string, contextKey: string } | null = null;
+
+// @fix: Update stoicQuotesModule type definition to expect readonly STOIC_QUOTES.
+let stoicQuotesModule: { STOIC_QUOTES: readonly Quote[] } | null = null;
 
 // PERF: Date Cache (Avoids GC Pressure)
 let _cachedRefToday: string | null = null;
@@ -196,7 +200,7 @@ export function updateUIText() {
     setTextContent(ui.labelNotifications, t('modalManageNotifications'));
     setTextContent(ui.labelReset, t('modalManageReset'));
     setTextContent(ui.resetAppBtn, t('modalManageResetButton'));
-    setTextContent(ui.manageModal.querySelector('.modal-close-btn'), t('cancelButton'));
+    setTextContent(ui.manageModal.querySelector('.modal-close-btn'), t('closeButton'));
     
     setTextContent(ui.labelPrivacy, t('privacyLabel'));
     setTextContent(ui.exportDataBtn, t('exportButton'));
@@ -238,6 +242,7 @@ export function updateUIText() {
 
     setTextContent(ui.confirmModal.querySelector('h2'), t('modalConfirmTitle'));
     setTextContent(ui.confirmModal.querySelector('.modal-close-btn'), t('cancelButton'));
+    setTextContent(ui.confirmModalEditBtn, t('editButton'));
     setTextContent(ui.confirmModalConfirmBtn, t('confirmButton'));
 
     setTextContent(ui.notesModal.querySelector('.modal-close-btn'), t('cancelButton'));
@@ -274,12 +279,12 @@ export function updateUIText() {
 // --- ORQUESTRAÇÃO GLOBAL ---
 
 /**
- * BLEEDING-EDGE PERF (Scheduler API):
- * Implementa um pipeline de renderização priorizado para garantir uma UI fluida.
- * - Estágio 1 (Síncrono): Renderiza o conteúdo crítico e interativo (cabeçalho, calendário, hábitos).
- * - Estágio 2 (postTask 'user-visible'): Adia o cálculo e renderização de componentes pesados (gráfico, estado da IA)
- *   para depois do primeiro paint, sem bloquear a entrada do usuário.
- * - Estágio 3 (postTask 'background'): Executa tarefas de baixa prioridade (citações) quando a thread principal está ociosa.
+ * SOTA UPDATE [2025-05-02]: Prioritized Rendering Pipeline.
+ * Divide o trabalho de renderização em estágios para evitar Long Tasks na Main Thread.
+ * 
+ * 1. Critical Path (Sync): Cabeçalho, Calendário, Hábitos. (Bloqueia até estar pronto - ~5ms)
+ * 2. Secondary (User-Visible): Estado da IA, Gráficos. (PostTask - roda após o próximo paint)
+ * 3. Background: Citações e Modais.
  */
 export function renderApp() {
     // Stage 1: Critical Rendering (Above the fold & Primary Interaction)
@@ -409,12 +414,9 @@ function _setupQuoteAutoCollapse() {
     ui.habitContainer.addEventListener('scroll', _quoteCollapseListener, { passive: true });
 }
 
-export function renderStoicQuote() {
+export async function renderStoicQuote() {
     // 1. Trigger background diagnosis (if needed)
-    // FIX: Decoupled Analysis Trigger via Event Bus.
-    if (!state.dailyDiagnoses[state.selectedDate]) {
-        document.dispatchEvent(new CustomEvent('request-analysis', { detail: { date: state.selectedDate } }));
-    }
+    checkAndAnalyzeDayContext(state.selectedDate);
 
     // CRITICAL FIX: Robust Context Key Generation
     const hour = new Date().getHours();
@@ -428,6 +430,16 @@ export function renderStoicQuote() {
     if (_cachedQuoteState && _cachedQuoteState.contextKey === currentContextKey) {
         return;
     }
+
+    if (!stoicQuotesModule) {
+        try {
+            stoicQuotesModule = await import('../data/quotes');
+        } catch (e) {
+            console.error("Failed to load stoic quotes module", e);
+            return;
+        }
+    }
+    const { STOIC_QUOTES } = stoicQuotesModule;
 
     // 2. Select Quote using The Stoic Oracle Engine
     const dateISO = state.selectedDate;

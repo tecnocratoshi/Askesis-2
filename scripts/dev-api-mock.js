@@ -1,4 +1,3 @@
-
 /**
  * @file scripts/dev-api-mock.js
  * @description Mock Serverless API handlers for local development.
@@ -72,7 +71,6 @@ async function handleApiSync(req, res) {
         // Socket Error Handler
         req.on('error', (err) => {
             console.error("Socket error on API Mock (Sync):", err);
-            if (!res.headersSent) res.end();
             resolve();
         });
 
@@ -162,7 +160,6 @@ async function handleApiAnalyze(req, res) {
     return new Promise((resolve) => {
         req.on('error', (err) => {
             console.error("Socket error on API Mock (Analyze):", err);
-            if (!res.headersSent) res.end();
             resolve();
         });
 
@@ -170,9 +167,6 @@ async function handleApiAnalyze(req, res) {
             res.writeHead(405).end();
             return resolve();
         }
-        
-        // ROBUSTNESS: Drain the stream to prevent client hanging on large payloads
-        req.resume();
         
         const mockResponse = "### Análise Local (Modo Desenvolvimento)\n\n**Estoicismo Simulado:**\n\nVocê está indo bem! A consistência é a chave.";
         

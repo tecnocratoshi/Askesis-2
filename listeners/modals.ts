@@ -1,3 +1,4 @@
+
 /**
  * @license
  * SPDX-License-Identifier: Apache-2.0
@@ -20,7 +21,9 @@ import { ui } from '../render/ui';
 import { 
     state, 
     LANGUAGES, 
+    STREAK_SEMI_CONSOLIDATED, 
     STREAK_CONSOLIDATED, 
+    DAYS_IN_CALENDAR, 
     invalidateChartCache, 
     FREQUENCIES,
     Habit,
@@ -48,29 +51,64 @@ import {
     saveHabitFromModal,
     requestHabitEndingFromModal,
     requestHabitPermanentDeletion,
+    requestHabitEditingFromModal,
     resetApplicationData,
     handleSaveNote,
     graduateHabit,
     performAIAnalysis,
     exportData,
     importData,
-    consumeAndFormatCelebrations,
-} from '../services/habitActions';
-import { t, setLanguage } from '../i18n';
+} from '../habitActions';
+import { t, setLanguage, formatList } from '../i18n';
 import { getHabitDisplayInfo } from '../services/selectors';
 import { setupReelRotary } from '../render/rotary';
-import { simpleMarkdownToHTML, pushToOneSignal, getContrastColor, addDays, parseUTCIsoDate, toUTCIsoDateString, triggerHaptic } from '../utils';
+import { simpleMarkdownToHTML, pushToOneSignal, getContrastColor, addDays, parseUTCIsoDate, toUTCIsoDateString } from '../utils';
 import { setTextContent } from '../render/dom';
+import { isHabitNameDuplicate } from '../services/selectors';
 
 // SECURITY: Limite rígido para inputs de texto para prevenir State Bloat e DoS.
 const MAX_HABIT_NAME_LENGTH = 50; 
 
+// CHAOS CONTROL: Semáforo para evitar múltiplas requisições de IA simultâneas
+let isAiEvalProcessing = false;
+
 // --- STATIC HELPERS ---
+
+const _processAndFormatCelebrations = (
+    pendingIds: string[], 
+    translationKey: 'aiCelebration21Day' | 'aiCelebration66Day',
+    streakMilestone: number
+): string => {
+    if (pendingIds.length === 0) return '';
+    
+    // PERF: Zero-allocation loop if possible, but map/filter is clean here.
+    const habitNamesList = pendingIds
+        .map(id => state.habits.find(h => h.id === id))
+        .filter(Boolean)
+        .map(h => getHabitDisplayInfo(h!).name);
+    
+    const habitNames = formatList(habitNamesList);
+        
+    pendingIds.forEach(id => {
+        const celebrationId = `${id}-${streakMilestone}`;
+        if (!state.notificationsShown.includes(celebrationId)) {
+            state.notificationsShown.push(celebrationId);
+        }
+    });
+
+    return t(translationKey, { count: pendingIds.length, habitNames });
+};
 
 // HELPER: Centraliza lógica de navegação do Almanaque para evitar duplicação (DRY)
 function _navigateToDateFromAlmanac(dateISO: string) {
     state.selectedDate = dateISO;
+    const newDate = parseUTCIsoDate(dateISO);
     
+    // Regenera a faixa de calendário centrada na nova data
+    state.calendarDates = Array.from({ length: DAYS_IN_CALENDAR }, (_, i) => 
+        addDays(newDate, i - 30)
+    );
+
     closeModal(ui.fullCalendarModal);
     
     state.uiDirtyState.calendarVisuals = true;
@@ -98,24 +136,26 @@ function _validateAndFeedback(newName: string): boolean {
     
     const trimmedName = newName.trim();
     let errorKey: string | null = null;
-    const isBlockingError = trimmedName.length === 0;
 
-    if (isBlockingError) {
+    if (trimmedName.length === 0) {
         errorKey = 'noticeNameCannotBeEmpty';
     } else if (trimmedName.length > 16) {
-        errorKey = 'noticeNameTooLong'; // Apenas um aviso não-bloqueante
+        errorKey = 'noticeNameTooLong';
+    } else if (isHabitNameDuplicate(trimmedName, state.editingHabit?.habitId)) {
+        errorKey = 'noticeDuplicateHabitWithName';
     }
 
-    const isValid = !isBlockingError;
+    const isValid = errorKey === null;
 
     // UI Updates (DOM Writes)
-    if (!errorKey) {
+    if (isValid) {
         if (formNoticeEl.classList.contains('visible')) {
             formNoticeEl.classList.remove('visible');
             habitNameInput.classList.remove('shake');
         }
     } else {
-        const errorText = t(errorKey);
+        const errorText = t(errorKey!);
+        // Dirty check text content
         if (formNoticeEl.textContent !== errorText) {
             formNoticeEl.textContent = errorText;
         }
@@ -123,16 +163,16 @@ function _validateAndFeedback(newName: string): boolean {
         if (!formNoticeEl.classList.contains('visible')) {
             formNoticeEl.classList.add('visible');
             
-            if (isBlockingError) {
-                requestAnimationFrame(() => {
-                    habitNameInput.classList.add('shake');
-                    habitNameInput.addEventListener('animationend', () => habitNameInput.classList.remove('shake'), { once: true });
-                });
-            }
+            // Trigger animation frame only when showing error
+            requestAnimationFrame(() => {
+                habitNameInput.classList.add('shake');
+                habitNameInput.addEventListener('animationend', () => {
+                    habitNameInput.classList.remove('shake');
+                }, { once: true });
+            });
         }
     }
-    
-    ui.editHabitSaveBtn.disabled = isBlockingError;
+
     return isValid;
 }
 
@@ -142,7 +182,6 @@ const _handleManageHabitsClick = () => {
     // CHAOS FIX: Prevents modal stacking
     if (ui.manageModal.classList.contains('visible')) return;
     
-    triggerHaptic('light');
     setupManageModal();
     updateNotificationUI();
     openModal(ui.manageModal);
@@ -152,7 +191,6 @@ const _handleFabClick = () => {
     // CHAOS FIX: Prevents modal stacking
     if (ui.exploreModal.classList.contains('visible')) return;
 
-    triggerHaptic('light');
     renderExploreHabits();
     openModal(ui.exploreModal);
 };
@@ -168,12 +206,12 @@ const _handleHabitListClick = (e: MouseEvent) => {
     // CHAOS FIX: Prevent opening confirmation if already open
     if (ui.confirmModal.classList.contains('visible')) return;
 
-    triggerHaptic('light');
-
     if (button.classList.contains('end-habit-btn')) {
         requestHabitEndingFromModal(habitId);
     } else if (button.classList.contains('permanent-delete-habit-btn')) {
         requestHabitPermanentDeletion(habitId);
+    } else if (button.classList.contains('edit-habit-btn')) {
+        requestHabitEditingFromModal(habitId);
     } else if (button.classList.contains('graduate-habit-btn')) {
         graduateHabit(habitId);
     }
@@ -192,7 +230,6 @@ const _handleResetAppClick = () => {
     // CHAOS FIX: Prevent stacking confirmation
     if (ui.confirmModal.classList.contains('visible')) return;
 
-    triggerHaptic('light');
     showConfirmationModal(
         t('confirmResetApp'),
         resetApplicationData,
@@ -220,14 +257,20 @@ const _handleNotificationToggleChange = () => {
 const _handleExploreHabitListClick = (e: MouseEvent) => {
     const item = (e.target as HTMLElement).closest<HTMLElement>('.explore-habit-item');
     if (!item) return;
-    triggerHaptic('light');
     const index = parseInt(item.dataset.index!, 10);
     const habitTemplate = PREDEFINED_HABITS[index];
     if (habitTemplate) {
+        const anyExistingHabit = state.habits.find(h =>
+            h.scheduleHistory.some(s => s.nameKey === habitTemplate.nameKey)
+        );
+
         closeModal(ui.exploreModal);
-        // LÓGICA RADICAL: Sempre abre o modal de edição para criar um NOVO hábito a partir do modelo,
-        // mesmo que um com nome parecido já exista. Elimina a ambiguidade.
-        openEditModal(habitTemplate);
+
+        if (anyExistingHabit) {
+            openEditModal(anyExistingHabit);
+        } else {
+            openEditModal(habitTemplate);
+        }
     }
 };
 
@@ -242,125 +285,107 @@ const _handleExploreHabitListKeydown = (e: KeyboardEvent) => {
 };
 
 const _handleCreateCustomHabitClick = () => {
-    triggerHaptic('light');
     closeModal(ui.exploreModal);
     openEditModal(null);
 };
 
 const _handleAiEvalClick = async () => {
-    // UNIFIED STATE CHECK: Confia em state.aiState e na visibilidade do modal.
-    if (state.aiState === 'loading' || ui.aiModal.classList.contains('visible') || ui.aiOptionsModal.classList.contains('visible')) {
+    // CHAOS FIX: Mutex for Async Operation + Visibility Check
+    if (isAiEvalProcessing || ui.aiModal.classList.contains('visible') || ui.aiOptionsModal.classList.contains('visible')) {
         return;
     }
     
-    triggerHaptic('light');
+    isAiEvalProcessing = true;
 
-    // OFFLINE HANDLING
-    if (!navigator.onLine) {
-        try {
-            const { STOIC_QUOTES } = await import('../data/quotes');
-            const offlineQuotes = STOIC_QUOTES.filter(q => 
-                q.metadata.tags.includes('control') || 
-                q.metadata.tags.includes('acceptance') ||
-                q.metadata.tags.includes('perception')
-            );
-            const sourceArray = offlineQuotes.length > 0 ? offlineQuotes : STOIC_QUOTES;
-            const randomQuote = sourceArray[Math.floor(Math.random() * sourceArray.length)];
-            const lang = state.activeLanguageCode as 'pt'|'en'|'es';
-            const quoteText = randomQuote.original_text[lang];
-            const author = t(randomQuote.author);
+    try {
+        // OFFLINE HANDLING
+        if (!navigator.onLine) {
+            try {
+                const { STOIC_QUOTES } = await import('../data/quotes');
+                const offlineQuotes = STOIC_QUOTES.filter(q => 
+                    q.metadata.tags.includes('control') || 
+                    q.metadata.tags.includes('acceptance') ||
+                    q.metadata.tags.includes('perception')
+                );
+                const sourceArray = offlineQuotes.length > 0 ? offlineQuotes : STOIC_QUOTES;
+                const randomQuote = sourceArray[Math.floor(Math.random() * sourceArray.length)];
+                const lang = state.activeLanguageCode as 'pt'|'en'|'es';
+                const quoteText = randomQuote.original_text[lang];
+                const author = t(randomQuote.author);
 
-            const message = `
-                <div class="offline-header">
-                    <h3 class="offline-title">${t('aiOfflineTitle')}</h3>
-                    <p class="offline-desc">${t('aiOfflineMessage')}</p>
-                </div>
-                <div class="offline-quote-box">
-                    <blockquote class="offline-quote-text">
-                        "${quoteText}"
-                    </blockquote>
-                    <div class="offline-quote-author">
-                        — ${author}
+                const message = `
+                    <div class="offline-header">
+                        <h3 class="offline-title">${t('aiOfflineTitle')}</h3>
+                        <p class="offline-desc">${t('aiOfflineMessage')}</p>
                     </div>
-                </div>
-            `;
-            ui.aiResponse.innerHTML = message;
-            openModal(ui.aiModal);
-        } catch (e) {
-            console.error("Failed to load offline quote", e);
+                    <div class="offline-quote-box">
+                        <blockquote class="offline-quote-text">
+                            "${quoteText}"
+                        </blockquote>
+                        <div class="offline-quote-author">
+                            — ${author}
+                        </div>
+                    </div>
+                `;
+                ui.aiResponse.innerHTML = message;
+                openModal(ui.aiModal);
+            } catch (e) {
+                console.error("Failed to load offline quote", e);
+            }
+            return;
         }
-        return;
-    }
 
-    let message = '';
-    
-    const allCelebrations = consumeAndFormatCelebrations();
+        let message = '';
+        
+        const celebration21DayText = _processAndFormatCelebrations(state.pending21DayHabitIds, 'aiCelebration21Day', STREAK_SEMI_CONSOLIDATED);
+        const celebration66DayText = _processAndFormatCelebrations(state.pendingConsolidationHabitIds, 'aiCelebration66Day', STREAK_CONSOLIDATED);
+        const allCelebrations = [celebration66DayText, celebration21DayText].filter(Boolean).join('\n\n');
 
-    if (allCelebrations) {
-        message = simpleMarkdownToHTML(allCelebrations);
-        renderAINotificationState();
-    } else if ((state.aiState === 'completed' || state.aiState === 'error') && !state.hasSeenAIResult && state.lastAIResult) {
-        message = simpleMarkdownToHTML(state.lastAIResult);
-    }
-    
-    if (message) {
-        ui.aiResponse.innerHTML = message;
-        openModal(ui.aiModal, undefined, () => {
-            state.hasSeenAIResult = true;
+        if (allCelebrations) {
+            message = simpleMarkdownToHTML(allCelebrations);
+            state.pending21DayHabitIds = [];
+            state.pendingConsolidationHabitIds = [];
+            saveState();
             renderAINotificationState();
-        });
-    } else {
-        openModal(ui.aiOptionsModal);
+        } else if ((state.aiState === 'completed' || state.aiState === 'error') && !state.hasSeenAIResult && state.lastAIResult) {
+            message = simpleMarkdownToHTML(state.lastAIResult);
+        }
+        
+        if (message) {
+            ui.aiResponse.innerHTML = message;
+            openModal(ui.aiModal, undefined, () => {
+                state.hasSeenAIResult = true;
+                renderAINotificationState();
+            });
+        } else {
+            openModal(ui.aiOptionsModal);
+        }
+    } finally {
+        isAiEvalProcessing = false;
     }
 };
 
 const _handleAiOptionsClick = (e: MouseEvent) => {
     const button = (e.target as HTMLElement).closest<HTMLButtonElement>('.ai-option-btn');
     if (!button) return;
-    triggerHaptic('light');
     const analysisType = button.dataset.analysisType as 'monthly' | 'quarterly' | 'historical';
     performAIAnalysis(analysisType);
 };
 
 const _handleConfirmClick = () => {
-    triggerHaptic('light');
     const action = state.confirmAction;
-    
-    // RACE CONDITION FIX [2025-06-03]: Execute action BEFORE closing modal.
-    // This ensures that contexts (ActionContext) are captured/used before
-    // the modal's onCancel/onClose handler wipes them out.
-    // If the action relies on ActionContext (like deletions), this order is critical.
-    try {
-        action?.();
-    } catch (e) {
-        console.error("Action execution failed", e);
-    }
-
     state.confirmAction = null;
     state.confirmEditAction = null;
-    
-    // CRITICAL FIX [2025-06-05]: Suppress callbacks (like onCancel) when confirming.
-    // This prevents the sync logic's onCancel handler from reverting the key after a successful overwrite.
-    closeModal(ui.confirmModal, true);
+    closeModal(ui.confirmModal);
+    action?.();
 };
 
 const _handleEditClick = () => {
-    triggerHaptic('light');
     const editAction = state.confirmEditAction;
-    
-    // RACE CONDITION FIX [2025-06-03]: Same logic as Confirm. 
-    // Capture context/execute action first.
-    try {
-        editAction?.();
-    } catch (e) {
-        console.error("Edit Action execution failed", e);
-    }
-
     state.confirmAction = null;
     state.confirmEditAction = null;
-    
-    // Suppress default cancel callbacks as "Edit" is a form of affirmative action here.
-    closeModal(ui.confirmModal, true);
+    closeModal(ui.confirmModal);
+    editAction?.();
 };
 
 const _handleFullCalendarPrevClick = () => {
@@ -431,22 +456,18 @@ const _handleHabitNameInput = () => {
     const habitNameInput = ui.editHabitForm.elements.namedItem('habit-name') as HTMLInputElement;
     let newName = habitNameInput.value;
 
+    // BLINDAGEM CONTRA DOS: Truncar input excessivo
     if (newName.length > MAX_HABIT_NAME_LENGTH) {
         newName = newName.substring(0, MAX_HABIT_NAME_LENGTH);
-        habitNameInput.value = newName;
-    }
-
-    if (state.editingHabit.formData.nameKey) {
-        delete state.editingHabit.formData.nameKey;
-        state.editingHabit.formData.subtitleKey = 'customHabitSubtitle';
-        if (ui.habitSubtitleDisplay) {
-            setTextContent(ui.habitSubtitleDisplay, t('customHabitSubtitle'));
-        }
+        habitNameInput.value = newName; // Reflete na UI
     }
 
     state.editingHabit.formData.name = newName;
-    
-    _validateAndFeedback(newName);
+    delete state.editingHabit.formData.nameKey; 
+
+    // Validation Logic decoupled
+    const isValid = _validateAndFeedback(newName);
+    ui.editHabitSaveBtn.disabled = !isValid;
 };
 
 const _handleIconPickerClick = () => {
@@ -458,7 +479,6 @@ const _handleIconGridClick = (e: MouseEvent) => {
     const target = e.target as HTMLElement;
     const item = target.closest<HTMLButtonElement>('.icon-picker-item');
     if (item && state.editingHabit) {
-        triggerHaptic('light');
         const iconSVG = item.dataset.iconSvg!;
         state.editingHabit.formData.icon = iconSVG;
         ui.habitIconPickerBtn.innerHTML = iconSVG;
@@ -470,7 +490,6 @@ const _handleColorGridClick = (e: MouseEvent) => {
     const target = e.target as HTMLElement;
     const swatch = target.closest<HTMLButtonElement>('.color-swatch');
     if (swatch && state.editingHabit) {
-        triggerHaptic('light');
         const color = swatch.dataset.color!;
         state.editingHabit.formData.color = color;
 
@@ -501,13 +520,14 @@ const _handleTimeContainerClick = (e: MouseEvent) => {
     const button = (e.target as HTMLElement).closest<HTMLButtonElement>('.segmented-control-option');
     if (!button) return;
 
-    triggerHaptic('light');
     const time = button.dataset.time as TimeOfDay; 
     const currentlySelected = state.editingHabit.formData.times.includes(time);
 
     if (currentlySelected) {
-        state.editingHabit.formData.times = state.editingHabit.formData.times.filter(t => t !== time);
-        button.classList.remove('selected');
+        if (state.editingHabit.formData.times.length > 1) {
+            state.editingHabit.formData.times = state.editingHabit.formData.times.filter(t => t !== time);
+            button.classList.remove('selected');
+        }
     } else {
         state.editingHabit.formData.times.push(time);
         button.classList.add('selected');
@@ -602,7 +622,7 @@ export function setupModalListeners() {
     // Dialogs
     ui.confirmModalConfirmBtn.addEventListener('click', _handleConfirmClick);
     ui.confirmModalEditBtn.addEventListener('click', _handleEditClick);
-    ui.saveNoteBtn.addEventListener('click', () => { triggerHaptic('light'); handleSaveNote(); });
+    ui.saveNoteBtn.addEventListener('click', handleSaveNote);
 
     // Full Calendar
     ui.fullCalendarPrevBtn.addEventListener('click', _handleFullCalendarPrevClick);
@@ -611,7 +631,7 @@ export function setupModalListeners() {
     ui.fullCalendarGrid.addEventListener('keydown', _handleFullCalendarGridKeydown);
 
     // Habit Editing Form
-    ui.editHabitSaveBtn.addEventListener('click', () => { triggerHaptic('light'); saveHabitFromModal(); });
+    ui.editHabitSaveBtn.addEventListener('click', saveHabitFromModal);
     
     // Performance Optimized Input Handler
     const habitNameInput = ui.editHabitForm.elements.namedItem('habit-name') as HTMLInputElement;
