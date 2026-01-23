@@ -47,9 +47,30 @@ function getWorker(): Worker {
         
         syncWorker.onerror = (e) => {
             console.error("Critical Worker Error:", e);
+            // REPAIR: Rejeita todas as callbacks pendentes em caso de erro fatal no worker
+            workerCallbacks.forEach((cb) => cb.reject(new Error("Worker error")));
+            workerCallbacks.clear();
         };
     }
     return syncWorker;
+}
+
+// --- FIX: Export addSyncLog function to fix missing member error in habitActions.ts ---
+/**
+ * Adiciona um log de sincronização ou atividade da IA ao estado global.
+ */
+export function addSyncLog(msg: string, type: 'success' | 'error' | 'info', icon?: string) {
+    if (!state.syncLogs) (state as any).syncLogs = [];
+    state.syncLogs.unshift({
+        time: Date.now(),
+        msg,
+        type,
+        icon
+    });
+    // Limita o histórico de logs para evitar estouro de memória/estado
+    if (state.syncLogs.length > 50) {
+        state.syncLogs.length = 50;
+    }
 }
 
 export function runWorkerTask<T>(type: 'encrypt' | 'decrypt' | 'build-ai-prompt' | 'build-quote-analysis-prompt' | 'prune-habit' | 'archive', payload: any, key?: string): Promise<T> {
@@ -57,22 +78,15 @@ export function runWorkerTask<T>(type: 'encrypt' | 'decrypt' | 'build-ai-prompt'
         const id = generateUUID();
         workerCallbacks.set(id, { resolve, reject });
         getWorker().postMessage({ id, type, payload, key });
+        
+        // SAFETY TIMEOUT: Se o worker não responder em 30s, cancela para não travar a UI
+        setTimeout(() => {
+            if (workerCallbacks.has(id)) {
+                workerCallbacks.get(id)?.reject(new Error("Worker timeout"));
+                workerCallbacks.delete(id);
+            }
+        }, 30000);
     });
-}
-
-// --- SYNC LOGGING ---
-/**
- * Adiciona um registro de log ao estado global para auditoria e diagnóstico de sincronização.
- */
-export function addSyncLog(msg: string, type: 'success' | 'error' | 'info', icon?: string) {
-    if (!state.syncLogs) {
-        (state as any).syncLogs = [];
-    }
-    state.syncLogs.push({ time: Date.now(), msg, type, icon });
-    // Mantém apenas os últimos 50 logs para evitar consumo excessivo de memória
-    if (state.syncLogs.length > 50) {
-        state.syncLogs.shift();
-    }
 }
 
 interface ServerPayload {
@@ -112,10 +126,11 @@ async function resolveConflictWithServerState(serverPayload: ServerPayload) {
         const mergedState = await mergeStates(localState, serverState);
         console.log("Smart Merge completed successfully.");
 
-        await persistStateLocally(mergedState, true); // Suppress sync loop
+        // REPAIR [2025-06-05]: Passa 'true' para suprimir sincronização imediata do persistStateLocally.
+        // Já faremos a sincronização manual abaixo após atualizar a memória.
+        await persistStateLocally(mergedState, true); 
         await loadState(mergedState);
         
-        // REPAIR: Manual dirty flag to force render/habits.ts to process the merged data
         state.uiDirtyState.habitListStructure = true;
         state.uiDirtyState.calendarVisuals = true;
         state.uiDirtyState.chartData = true;
@@ -124,6 +139,7 @@ async function resolveConflictWithServerState(serverPayload: ServerPayload) {
         setSyncStatus('syncSynced'); 
         document.dispatchEvent(new CustomEvent('habitsChanged'));
 
+        // Empurra o estado mesclado final de volta para a nuvem para estabilizar
         syncStateWithCloud(mergedState, true);
         
     } catch (error) {
@@ -165,6 +181,8 @@ async function performSync() {
         if (response.status === 409) {
             const serverPayload: ServerPayload = await response.json();
             await resolveConflictWithServerState(serverPayload);
+        } else if (!response.ok) {
+            throw new Error(`Server returned ${response.status}`);
         } else {
             setSyncStatus('syncSynced');
             document.dispatchEvent(new CustomEvent('habitsChanged')); 

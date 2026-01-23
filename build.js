@@ -1,4 +1,3 @@
-
 const esbuild = require('esbuild');
 const fs = require('fs/promises');
 const fsSync = require('fs');
@@ -72,8 +71,11 @@ async function copyStaticFiles() {
 }
 
 const esbuildOptions = {
-    // CORREÇÃO: Removido 'sync-worker' pois agora ele é inline (blob)
-    entryPoints: { 'bundle': 'index.tsx' },
+    // REPAIR: Incluído sync-worker para que o arquivo services/sync.worker.ts seja compilado para public/sync-worker.js
+    entryPoints: { 
+        'bundle': 'index.tsx',
+        'sync-worker': 'services/sync.worker.ts'
+    },
     bundle: true,
     splitting: true,
     outdir: outdir,
