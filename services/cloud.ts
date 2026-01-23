@@ -97,14 +97,13 @@ async function resolveConflictWithServerState(serverPayload: ServerPayload) {
         const localState = getPersistableState();
         const mergedState = await mergeStates(localState, serverState);
 
-        await persistStateLocally(mergedState, true); // Suprime o trigger de sync para evitar loop
+        await persistStateLocally(mergedState);
         await loadState(mergedState);
         
         renderApp();
         setSyncStatus('syncSynced'); 
         document.dispatchEvent(new CustomEvent('habitsChanged'));
 
-        // Envia o estado resultante do merge de volta para a nuvem
         syncStateWithCloud(mergedState, true);
     } catch (error) {
         console.error("Failed to resolve conflict:", error);
@@ -150,38 +149,22 @@ async function performSync() {
     } catch (error) {
         console.error("Sync error:", error);
         setSyncStatus('syncError');
-        // REPAIR: Se falhou, mantém o estado como pendente para a próxima tentativa se houver nova mudança
     } finally {
         isSyncInProgress = false;
-        if (pendingSyncState) {
-            setTimeout(performSync, 100);
-        }
+        if (pendingSyncState) performSync();
     }
 }
 
 export function syncStateWithCloud(appState: AppState, immediate = false) {
     if (!hasLocalSyncKey()) return;
-    
     pendingSyncState = appState; 
-    
-    if (state.syncState !== 'syncSaving') {
-        setSyncStatus('syncSaving');
-    }
-
+    setSyncStatus('syncSaving');
     if (syncTimeout) clearTimeout(syncTimeout);
-    
     if (isSyncInProgress) return;
-
-    if (immediate) {
-        performSync();
-    } else {
-        syncTimeout = window.setTimeout(performSync, DEBOUNCE_DELAY);
-    }
+    if (immediate) performSync();
+    else syncTimeout = window.setTimeout(performSync, DEBOUNCE_DELAY);
 }
 
-/**
- * Função de sincronização proativa disparada no Boot ou quando volta a ficar Online.
- */
 export async function fetchStateFromCloud(): Promise<AppState | undefined> {
     if (!hasLocalSyncKey()) return undefined;
     const syncKey = getSyncKey();
@@ -204,42 +187,38 @@ export async function fetchStateFromCloud(): Promise<AppState | undefined> {
             const remoteLastModified = data.lastModified || 0;
             const localLastModified = localState.lastModified || 0;
 
-            // CASO 1: Local é mais novo (ex: usuário fechou o app antes do debounce de 2s)
+            // PROACTIVE BOOT SYNC:
+            // Se o local for mais novo, empurra imediatamente para a nuvem
             if (localLastModified > remoteLastModified) {
-                console.log("[Sync] Boot check: Local is newer. Pushing.");
+                console.log("[Sync] Boot check: Local is newer than Cloud. Pushing updates.");
                 syncStateWithCloud(localState, true);
                 return undefined;
             }
 
-            // CASO 2: Remoto é mais novo ou conflito (Merge)
+            // Se o remoto for mais novo, baixa e faz merge
             const remoteState = await runWorkerTask<AppState>('decrypt', data.state, syncKey);
             
             if (remoteLastModified > localLastModified) {
-                console.log("[Sync] Boot check: Remote is newer. Merging.");
+                console.log("[Sync] Boot check: Cloud is newer than Local. Merging data.");
                 const mergedState = await mergeStates(localState, remoteState);
                 await persistStateLocally(mergedState, true); 
                 await loadState(mergedState);
                 renderApp();
-                
-                // Se o merge resultou em algo novo, empurra de volta
-                if (mergedState.lastModified > remoteLastModified) {
-                    syncStateWithCloud(mergedState, true);
-                }
             }
 
             setSyncStatus('syncSynced');
             return remoteState;
         } else {
-            // Nuvem vazia: Se temos dados locais, faz o push inicial
+            // Nuvem vazia, mas temos dados locais? Empurra no boot.
             if (state.habits.length > 0) {
-                console.log("[Sync] Boot check: Cloud empty. Pushing initial.");
+                console.log("[Sync] Boot check: Cloud empty. Initializing with local data.");
                 syncStateWithCloud(localState, true);
             }
             setSyncStatus('syncSynced');
             return undefined;
         }
     } catch (error) {
-        console.error("Cloud check failed:", error);
+        console.error("Cloud fetch error:", error);
         setSyncStatus('syncError');
         throw error;
     }
