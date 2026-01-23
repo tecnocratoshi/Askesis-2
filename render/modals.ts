@@ -1,4 +1,3 @@
-
 /**
  * @license
  * SPDX-License-Identifier: Apache-2.0
@@ -17,6 +16,8 @@ import { t, compareStrings, formatDate, formatInteger, getTimeOfDayName } from '
 import { HABIT_ICONS, UI_ICONS, getTimeOfDayIcon } from './icons';
 import { setTextContent, updateReelRotaryARIA } from './dom';
 import { escapeHTML, getContrastColor, parseUTCIsoDate, getTodayUTCIso, getSafeDate, triggerHaptic } from '../utils';
+// Added to support Sync Diagnostics modal
+import { diagnoseConnection } from '../services/cloud';
 
 interface ModalContext { element: HTMLElement; previousFocus: HTMLElement | null; onClose?: () => void; firstFocusable?: HTMLElement; lastFocusable?: HTMLElement; }
 const modalStack: ModalContext[] = [];
@@ -57,11 +58,6 @@ export function initModalEngine() {
             triggerHaptic('light');
             closeModal(ctx.element);
         }
-    });
-    // Global listener para logs reativos
-    document.addEventListener('sync-logs-updated', () => {
-        const modal = document.getElementById('sync-debug-modal');
-        if (modal?.classList.contains('visible')) renderSyncLogs();
     });
 }
 
@@ -105,34 +101,6 @@ export function closeModal(modal: HTMLElement, suppressCallbacks = false) {
 
     if (!suppressCallbacks) ctx.onClose?.(); 
     ctx.previousFocus?.focus();
-}
-
-export function renderSyncLogs() {
-    const list = document.getElementById('sync-logs-list');
-    if (!list) return;
-
-    if (!state.syncLogs || state.syncLogs.length === 0) {
-        list.innerHTML = `<li class="sync-log-entry info"><em>Nenhum log disponível.</em></li>`;
-        return;
-    }
-    
-    const OPTS_TIME: any = { hour: '2-digit', minute: '2-digit', second: '2-digit' };
-    list.innerHTML = state.syncLogs.map(log => `
-        <li class="sync-log-entry ${log.type}">
-            <span class="log-time">[${new Date(log.time).toLocaleTimeString(state.activeLanguageCode, OPTS_TIME)}]</span>
-            <span class="log-msg">${escapeHTML(log.msg)}</span>
-        </li>
-    `).join('');
-    
-    requestAnimationFrame(() => { list.scrollTop = list.scrollHeight; });
-}
-
-export function openSyncDebugModal() {
-    const modal = document.getElementById('sync-debug-modal');
-    if (modal) {
-        renderSyncLogs();
-        openModal(modal);
-    }
 }
 
 export function setupManageModal() {
@@ -224,16 +192,19 @@ export function openEditModal(habit: any, targetDateOverride?: string) {
 
     let fd: HabitTemplate;
     if (isN) {
+        // Para novos hábitos (a partir de template ou customizado), não há risco de mutação
         fd = { icon: HABIT_ICONS.custom, color: _getLeastUsedColor(), times: ['Morning'], goal: { type: 'check' }, frequency: { type: 'daily' }, name: '', subtitleKey: 'customHabitSubtitle', ...habit };
     } else {
+        // Para edição, cria cópias defensivas para isolar o formulário do estado original
         const scheduleToEdit = getScheduleForDate(habit, safe) || habit.scheduleHistory[0];
+        
         const originalFrequency = scheduleToEdit.frequency;
         const newFrequency: Frequency = originalFrequency.type === 'specific_days_of_week' 
             ? { ...originalFrequency, days: [...originalFrequency.days] } 
             : { ...originalFrequency };
 
         fd = {
-            ...(scheduleToEdit as any),
+            ...(scheduleToEdit as any), // Cast para evitar erro de tipo com name/nameKey
             times: [...scheduleToEdit.times],
             frequency: newFrequency,
             goal: { ...scheduleToEdit.goal }
@@ -245,15 +216,31 @@ export function openEditModal(habit: any, targetDateOverride?: string) {
     if (ni) ni.value = isN ? (fd.nameKey ? t(fd.nameKey) : '') : getHabitDisplayInfo(habit, safe).name;
     const btn = ui.habitIconPickerBtn; btn.innerHTML = fd.icon; btn.style.backgroundColor = fd.color; btn.style.color = getContrastColor(fd.color);
     
-    const subtitle = isN ? (fd.subtitleKey ? t(fd.subtitleKey) : '') : getHabitDisplayInfo(habit, safe).subtitle;
-    if (ui.habitSubtitleDisplay) setTextContent(ui.habitSubtitleDisplay, subtitle);
+    const subtitle = isN 
+        ? (fd.subtitleKey ? t(fd.subtitleKey) : '') 
+        : getHabitDisplayInfo(habit, safe).subtitle;
+    if (ui.habitSubtitleDisplay) {
+        setTextContent(ui.habitSubtitleDisplay, subtitle);
+    }
     
+    const overlay = btn.nextElementSibling as HTMLElement;
+    if (overlay && overlay.classList.contains('edit-icon-overlay')) {
+        overlay.innerHTML = HABIT_ICONS.learnSkill;
+    }
+
     refreshEditModalUI(); openModal(ui.editHabitModal);
 }
 
 export function renderExploreHabits() {
+    const STAGGER_DELAY_MS = 50;
     ui.exploreHabitList.innerHTML = PREDEFINED_HABITS.map((h, i) => 
-        `<div class="explore-habit-item" data-index="${i}" role="button" tabindex="0">
+        `<div 
+            class="explore-habit-item" 
+            data-index="${i}" 
+            role="button" 
+            tabindex="0"
+            style="--delay: ${i * STAGGER_DELAY_MS}ms;"
+        >
             <div class="explore-habit-icon" style="background-color:${h.color}30;color:${h.color}">${h.icon}</div>
             <div class="explore-habit-details">
                 <div class="name">${t(h.nameKey)}</div>
@@ -269,4 +256,16 @@ export function renderLanguageFilter() {
     const w = (ui.languageReel.querySelector('.reel-option') as HTMLElement)?.offsetWidth || 95;
     ui.languageReel.style.transform = `translateX(${-idx * w}px)`;
     updateReelRotaryARIA(ui.languageViewport, idx, names, 'language_ariaLabel');
+}
+
+/**
+ * FIXED: Implemented missing export used in sync listeners to show connection diagnostics.
+ */
+export async function openSyncDebugModal() {
+    triggerHaptic('light');
+    const report = await diagnoseConnection();
+    showConfirmationModal(`<pre style="font-size:10px; text-align:left; white-space:pre-wrap; background:rgba(0,0,0,0.05); padding:8px; border-radius:4px; max-height:200px; overflow:auto; font-family:monospace; line-height:1.4;">${escapeHTML(report)}</pre>`, () => {}, { 
+        title: "Sync Diagnostics", 
+        confirmText: "OK" 
+    });
 }

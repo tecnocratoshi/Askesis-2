@@ -6,9 +6,8 @@
 
 import { ui } from "../render/ui";
 import { t } from "../i18n";
-// @fix: Changed downloadRemoteState to fetchStateFromCloud which is the actual exported function.
-import { fetchStateFromCloud, syncStateWithCloud, setSyncStatus } from "../services/cloud";
-import { loadState, saveState, clearLocalPersistence } from "../services/persistence";
+import { fetchStateFromCloud, syncStateWithCloud, setSyncStatus, diagnoseConnection } from "../services/cloud";
+import { loadState, saveState } from "../services/persistence";
 import { renderApp, openSyncDebugModal } from "../render";
 import { showConfirmationModal } from "../render/modals";
 import { storeKey, clearKey, hasLocalSyncKey, getSyncKey, isValidKeyFormat } from "../services/api";
@@ -61,7 +60,6 @@ async function _processKey(key: string) {
         storeKey(key);
         _refreshViewState(); 
         
-        // @fix: Changed downloadRemoteState to fetchStateFromCloud. It uses getSyncKey() internally.
         const cloudState = await fetchStateFromCloud();
 
         if (cloudState) {
@@ -99,16 +97,24 @@ async function _processKey(key: string) {
 const _handleEnableSync = () => {
     try {
         ui.enableSyncBtn.disabled = true;
+        if (ui.syncErrorMsg) ui.syncErrorMsg.classList.add('hidden');
+        
         const newKey = generateUUID();
         storeKey(newKey);
         setSyncStatus('syncSynced');
+        
         ui.syncKeyText.textContent = newKey;
         ui.syncDisplayKeyView.dataset.context = 'setup';
         showView('displayKey');
         syncStateWithCloud(getPersistableState(), true);
+        
         setTimeout(() => ui.enableSyncBtn.disabled = false, 500);
     } catch (e: any) {
         ui.enableSyncBtn.disabled = false;
+        if (ui.syncErrorMsg) {
+            ui.syncErrorMsg.textContent = e.message || "Erro ao gerar chave";
+            ui.syncErrorMsg.classList.remove('hidden');
+        }
     }
 };
 
@@ -126,6 +132,7 @@ const _handleCancelEnterKey = () => {
 const _handleSubmitKey = () => {
     const key = ui.syncKeyInput.value.trim();
     if (!key) return;
+    if (ui.syncErrorMsg) ui.syncErrorMsg.classList.add('hidden');
     if (!isValidKeyFormat(key)) {
         showConfirmationModal(t('confirmInvalidKeyBody'), () => _processKey(key), { title: t('confirmInvalidKeyTitle'), confirmText: t('confirmButton'), cancelText: t('cancelButton') });
     } else {
@@ -159,9 +166,8 @@ const _handleDisableSync = () => {
     showConfirmationModal(t('confirmSyncDisable'), () => { clearKey(); setSyncStatus('syncInitial'); showView('inactive'); }, { title: t('syncDisableTitle'), confirmText: t('syncDisableConfirm'), confirmButtonStyle: 'danger' });
 };
 
-const _handleOpenTelemetry = (e: PointerEvent) => {
-    // BRAVE COMPATIBILITY: Usa pointerdown para evitar bloqueio de Shields e atrasos de clique
-    if (e.button !== 0) return;
+const _handleDiagnostics = async (e: PointerEvent) => {
+    if (e.button !== 0) return; // Left click only
     if (!hasLocalSyncKey()) return;
 
     e.preventDefault();
@@ -193,8 +199,8 @@ export function initSync() {
     if (ui.disableSyncBtn) ui.disableSyncBtn.addEventListener('click', _handleDisableSync);
     
     if (ui.syncStatus) {
-        // Mudança para pointerdown para máxima responsividade e contornar filtros do Brave
-        ui.syncStatus.addEventListener('pointerdown', _handleOpenTelemetry);
+        // BRAVE FIX: Use pointerdown to bypass aggressive shielding/hit-area issues
+        ui.syncStatus.addEventListener('pointerdown', _handleDiagnostics);
     }
 
     _refreshViewState();

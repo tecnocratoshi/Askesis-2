@@ -166,7 +166,7 @@ export interface AppState {
     readonly pendingConsolidationHabitIds: readonly string[];
     readonly quoteState?: QuoteDisplayState;
     readonly hasOnboarded: boolean; // Flag to prevent recreation of default habits
-    readonly syncLogs?: SyncLog[];
+    syncLogs?: SyncLog[];
     monthlyLogs?: Map<string, bigint>;
 }
 
@@ -329,7 +329,7 @@ export function getPersistableState(): AppState {
         pendingConsolidationHabitIds: state.pendingConsolidationHabitIds,
         quoteState: state.quoteState,
         hasOnboarded: state.hasOnboarded,
-        syncLogs: state.syncLogs.slice(-50), // Persiste apenas os últimos 50 logs para evitar bloat
+        syncLogs: state.syncLogs.slice(-50),
     };
 }
 

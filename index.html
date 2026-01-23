@@ -38,7 +38,7 @@
             text-decoration: underline dotted;
             cursor: pointer;
             padding: 4px 8px;
-            margin: -4px -8px; /* Expande área de toque sem mover o texto */
+            margin: -4px -8px; /* Expand hit area without moving text */
             border-radius: var(--border-radius-small);
             transition: opacity 0.2s, background-color 0.2s;
             display: inline-block;
@@ -52,12 +52,10 @@
         #sync-status:hover {
             background-color: rgba(0, 122, 255, 0.1);
             opacity: 0.9;
-            text-decoration: underline;
         }
         #sync-status:active {
             opacity: 0.6;
             background-color: rgba(0, 122, 255, 0.2);
-            transform: scale(0.98);
         }
         #sync-status:empty { display: none; }
     </style>
@@ -82,8 +80,7 @@
     "@vercel/analytics": "https://esm.sh/@vercel/analytics@^1.6.1",
     "@vercel/kv": "https://esm.sh/@vercel/kv@^3.0.0",
     "path": "https://esm.sh/path@^0.12.7",
-    "vite": "https://esm.sh/vite@^7.3.1",
-    "url": "https://esm.sh/url@^0.11.4"
+    "vite": "https://esm.sh/vite@^7.3.1"
   }
 }
 </script>
@@ -121,7 +118,7 @@
           window.showFatalError = function(msg, isWatchdog) { if (errorDisplayed) return; errorDisplayed = true; var ui = getUI(); if (!ui.loader || !ui.loader.isConnected) { if (!isWatchdog) alert("Erro Crítico: " + msg); return; } if (ui.loader) { if (ui.spinner) ui.spinner.style.display = 'none'; if (ui.errUi) { if (ui.errTitle) ui.errTitle.textContent = isWatchdog ? 'Tempo Excedido' : 'Falha Crítica'; if (ui.errMsg) ui.errTitle.textContent = msg || 'Erro interno.'; ui.errUi.classList.remove('d-none'); } ui.loader.classList.remove('hidden'); } };
           window.onerror = function(message, source, lineno, colno, error) { var msg = message || (error && error.message) || ""; if (typeof msg === 'string' && (msg.indexOf('OneSignal') !== -1 || msg.indexOf('onesignal') !== -1)) return true; if (typeof msg === 'string' && msg.includes('ResizeObserver loop')) return true; window.showFatalError(msg); return false; };
           window.onunhandledrejection = function(event) { var reason = event.reason; var msg = 'Erro Assíncrono: ' + (reason ? (reason.message || reason) : 'Desconhecido'); if (typeof msg === 'string' && (msg.indexOf('OneSignal') !== -1 || msg.indexOf('onesignal') !== -1)) return; window.showFatalError(msg); };
-          window.bootWatchdog = setTimeout(function() { var ui = getUI(); if (ui.loader && ui.loader.isConnected && !ui.loader.classList.contains('hidden')) window.showFatalError("O aplicativo demorou muito para responder.", true); }, 8000);
+          window.bootWatchdog = setTimeout(function() { var ui = getUI(); if (ui.loader && ui.loader.isConnected && !ui.loader.classList.contains('hidden')) window.showFatalError("O aplicativo demorou muito para responder. Verifique sua conexão.", true); }, 8000);
       })();
     </script>
     <div class="app-container">
@@ -201,10 +198,10 @@
     <div id="icon-picker-modal" class="modal-overlay"><div class="modal-content"><div class="modal-header"><div class="modal-header-spacer"></div><h2 id="icon-picker-modal-title">Selecionar Ícone</h2><button id="change-color-from-picker-btn" class="icon-btn"></button></div><div id="icon-picker-grid"></div></div></div>
     <div id="color-picker-modal" class="modal-overlay"><div class="modal-content"><div class="modal-header"><div class="modal-header-spacer"></div><h2 id="color-picker-modal-title">Selecionar Cor</h2><div class="modal-header-spacer"></div></div><div id="color-picker-grid"></div></div></div>
     <div id="edit-habit-modal" class="modal-overlay"><div class="modal-content"><div class="modal-header"><div class="modal-header-spacer"></div><h2 id="edit-habit-modal-title">Editar Hábito</h2><div class="modal-header-spacer"></div></div><form id="edit-habit-form"><div class="habit-identity-section"><div class="habit-icon-picker-wrapper"><button type="button" id="habit-icon-picker-btn" class="habit-icon-picker-btn"></button><div class="edit-icon-overlay"></div></div><div class="habit-name-input-wrapper"><input type="text" id="habit-name" name="habit-name" class="form-control" placeholder="Nome" autocomplete="off" style="background:transparent;border:none;font-size:20px;padding:0;"><div id="habit-subtitle-display" class="habit-subtitle-display"></div><div class="form-notice"></div></div></div><div class="form-section"><div class="form-row form-row--no-border"><label>Horário</label></div><div id="habit-time-container" style="padding: 0 var(--space-lg) var(--space-lg);"></div></div><div id="frequency-options-container"></div></form><div class="modal-actions"><button id="edit-habit-save-btn" class="btn btn--primary">Salvar</button></div></div></div>
-    <div id="full-calendar-modal" class="modal-overlay"><div class="modal-content"><div id="full-calendar-header" class="modal-header"><button id="full-calendar-prev" class="icon-btn"><svg width="24" height="24"><use href="#icon-chevron-left"></use></svg></button><h2 id="full-calendar-month-year"></h2><button id="full-calendar-next" class="icon-btn"><svg width="24" height="24"><use href="#icon-chevron-right"></use></svg></button></div><div id="full-calendar-weekdays"></div><div id="full-calendar-grid"></div></div></div>
+    <div id="full-calendar-modal" class="modal-overlay"><div class="modal-content"><div id="full-calendar-header" class="modal-header"><button id="full-calendar-prev" class="icon-btn"><svg width="24" height="24"><use href="#icon-chevron-left"></use></svg></button><h2 id="header-title-full-calendar"></h2><button id="full-calendar-next" class="icon-btn"><svg width="24" height="24"><use href="#icon-chevron-right"></use></svg></button></div><div id="full-calendar-weekdays"></div><div id="full-calendar-grid"></div></div></div>
     <div id="calendar-quick-actions" class="modal-overlay"><div class="quick-actions-content"><button id="quick-action-done" class="quick-action-btn"></button><div class="quick-action-divider"></div><button id="quick-action-snooze" class="quick-action-btn"></button><div class="quick-action-divider"></div><button id="quick-action-almanac" class="quick-action-btn"></button></div></div>
-
-    <!-- Sync Debug Modal -->
+    
+    <!-- SYNC DEBUG MODAL -->
     <div id="sync-debug-modal" class="modal-overlay">
         <div class="modal-content">
             <div class="modal-header">
@@ -213,8 +210,8 @@
                 <div class="modal-header-spacer"></div>
             </div>
             <style>
-                #sync-logs-list { list-style: none; padding: 0; font-family: monospace; font-size: 11px; max-height: 400px; overflow-y: auto; background: #0a0a0a; border: 1px solid var(--border-color); border-radius: var(--border-radius-base); }
-                .sync-log-entry { padding: 8px; border-bottom: 1px solid var(--border-color); line-height: 1.4; display: flex; gap: 8px; }
+                #sync-logs-list { list-style: none; padding: 0; font-family: monospace; font-size: 11px; max-height: 300px; overflow-y: auto; background: #0a0a0a; border-radius: 4px; border: 1px solid var(--border-color); }
+                .sync-log-entry { padding: 6px 10px; border-bottom: 1px solid #1a1a1a; display: flex; gap: 8px; }
                 .sync-log-entry:last-child { border-bottom: none; }
                 .log-time { color: var(--text-tertiary); flex-shrink: 0; }
                 .log-msg { color: var(--text-secondary); word-break: break-all; }
@@ -224,7 +221,7 @@
             </style>
             <ul id="sync-logs-list"></ul>
             <div class="modal-actions">
-                <button onclick="const m=document.getElementById('sync-debug-modal'); m.classList.remove('visible'); document.querySelector('.app-container').removeAttribute('inert');" class="btn btn--primary">Fechar</button>
+                <button class="btn btn--primary" onclick="document.getElementById('sync-debug-modal').classList.remove('visible'); document.querySelector('.app-container').removeAttribute('inert');">Fechar</button>
             </div>
         </div>
     </div>

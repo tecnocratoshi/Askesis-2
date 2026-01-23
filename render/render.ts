@@ -9,31 +9,30 @@
  * @description Orquestrador de Renderização (View Orchestrator / Facade).
  */
 
-import { state, LANGUAGES } from '../state';
-import { parseUTCIsoDate, toUTCIsoDateString, addDays, pushToOneSignal, getTodayUTCIso } from '../utils';
-import { ui } from '../render/ui';
-import { t, setLanguage, formatDate } from '../i18n'; 
-import { UI_ICONS } from '../render/icons';
-import type { Quote } from '../data/quotes';
-// @fix: Changed import from habitActions to analysis where checkAndAnalyzeDayContext is actually defined.
-import { checkAndAnalyzeDayContext } from '../services/analysis';
-import { selectBestQuote } from '../services/quoteEngine';
-import { calculateDaySummary } from '../services/selectors';
+import { state, LANGUAGES } from './state';
+import { parseUTCIsoDate, toUTCIsoDateString, addDays, pushToOneSignal, getTodayUTCIso } from './utils';
+import { ui } from './render/ui';
+import { t, setLanguage, formatDate } from './i18n'; 
+import { UI_ICONS } from './render/icons';
+import type { Quote } from './data/quotes';
+import { checkAndAnalyzeDayContext } from './habitActions';
+import { selectBestQuote } from './services/quoteEngine';
+import { calculateDaySummary } from './services/selectors';
 
-import { setTextContent, updateReelRotaryARIA } from '../render/dom';
-import { renderCalendar, renderFullCalendar } from '../render/calendar';
-import { renderHabits } from '../render/habits';
-import { renderChart } from '../render/chart';
-import { setupManageModal, refreshEditModalUI, renderLanguageFilter, renderIconPicker, renderFrequencyOptions } from '../render/modals';
+import { setTextContent, updateReelRotaryARIA } from './render/dom';
+import { renderCalendar, renderFullCalendar } from './render/calendar';
+import { renderHabits } from './render/habits';
+import { renderChart } from './render/chart';
+import { setupManageModal, refreshEditModalUI, renderLanguageFilter, renderIconPicker, renderFrequencyOptions } from './render/modals';
 
-export * from '../render/dom';
-export * from '../render/calendar';
-export * from '../render/habits';
-export * from '../render/modals';
-export * from '../render/chart';
+export * from './render/dom';
+export * from './render/calendar';
+export * from './render/habits';
+export * from './render/modals';
+export * from './render/chart';
 
 // EXPORT FIX: Garante que clearHabitDomCache esteja disponível para o cloud.ts
-export { clearHabitDomCache } from '../render/habits';
+export { clearHabitDomCache } from './render/habits';
 
 let _lastTitleDate: string | null = null;
 let _lastTitleLang: string | null = null;
@@ -221,8 +220,7 @@ function _setupQuoteAutoCollapse() {
         if ((e.target as HTMLElement).closest('.stoic-quote')) return;
         if (ui.stoicQuoteDisplay.querySelector('.quote-expanded')) { _cachedQuoteState = null; renderStoicQuote(); }
         document.removeEventListener('click', _quoteCollapseListener!, { capture: true });
-        // @fix: removeEventListener does not support 'passive' in options.
-        ui.habitContainer.removeEventListener('scroll', _quoteCollapseListener!);
+        ui.habitContainer.removeEventListener('scroll', _quoteCollapseListener!, { passive: true });
         _quoteCollapseListener = null;
     };
     document.addEventListener('click', _quoteCollapseListener, { capture: true });

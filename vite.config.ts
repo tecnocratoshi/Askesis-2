@@ -1,9 +1,6 @@
 import path from 'path';
-import { fileURLToPath } from 'url';
 import { defineConfig, loadEnv } from 'vite';
 
-// Fix: Define __dirname for ES modules environment
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 export default defineConfig(({ mode }) => {
     const env = loadEnv(mode, '.', '');
@@ -19,7 +16,8 @@ export default defineConfig(({ mode }) => {
       },
       resolve: {
         alias: {
-          '@': path.resolve(__dirname, '.'),
+          // Fixed: __dirname is not available in Node ESM. Using path.resolve('.') for root alias.
+          '@': path.resolve('.'),
         }
       }
     };
