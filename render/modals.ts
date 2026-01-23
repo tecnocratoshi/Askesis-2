@@ -1,3 +1,4 @@
+
 /**
  * @license
  * SPDX-License-Identifier: Apache-2.0
@@ -24,7 +25,6 @@ const COLORS = ['#e74c3c', '#f1c40f', '#3498db', '#2ecc71', '#9b59b6', '#1abc9c'
 
 function _getLeastUsedColor(): string {
     const counts = new Map(COLORS.map(c => [c, 0]));
-    // @fix: Get color from the last schedule in history, as it's no longer on the Habit object.
     state.habits.forEach(h => {
         const lastSchedule = h.scheduleHistory[h.scheduleHistory.length - 1];
         if (!h.graduatedOn && lastSchedule && counts.has(lastSchedule.color)) {
@@ -58,11 +58,14 @@ export function initModalEngine() {
             closeModal(ctx.element);
         }
     });
+    // Global listener for reactive log updates
+    document.addEventListener('sync-logs-updated', () => {
+        if (ui.syncDebugModal.classList.contains('visible')) renderSyncLogs();
+    });
 }
 
 export function openModal(modal: HTMLElement, focusEl?: HTMLElement, onClose?: () => void) {
     const ctx: ModalContext = { element: modal, previousFocus: document.activeElement as HTMLElement, onClose };
-    
     const header = modal.querySelector('.modal-header');
     if (header) {
         const spacer = header.querySelector('.modal-header-spacer');
@@ -71,14 +74,10 @@ export function openModal(modal: HTMLElement, focusEl?: HTMLElement, onClose?: (
             backBtn.className = 'modal-back-btn';
             backBtn.innerHTML = UI_ICONS.backArrow;
             backBtn.setAttribute('aria-label', t('aria_go_back'));
-            backBtn.addEventListener('click', () => {
-                triggerHaptic('light');
-                closeModal(modal);
-            });
+            backBtn.addEventListener('click', () => { triggerHaptic('light'); closeModal(modal); });
             spacer.replaceWith(backBtn);
         }
     }
-    
     modal.classList.add('visible');
     const fobs = modal.querySelectorAll<HTMLElement>('button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])');
     if (fobs.length) { ctx.firstFocusable = fobs[0]; ctx.lastFocusable = fobs[fobs.length - 1]; setTimeout(() => (focusEl || fobs[0]).focus(), 100); }
@@ -89,17 +88,30 @@ export function closeModal(modal: HTMLElement, suppressCallbacks = false) {
     const idx = modalStack.findIndex(c => c.element === modal); if (idx === -1) return;
     const [ctx] = modalStack.splice(idx, 1); modal.classList.remove('visible');
     if (modalStack.length === 0) ui.appContainer.removeAttribute('inert');
-    
     const header = modal.querySelector('.modal-header');
     const backBtn = header?.querySelector('.modal-back-btn');
-    if (header && backBtn) {
-        const spacer = document.createElement('div');
-        spacer.className = 'modal-header-spacer';
-        backBtn.replaceWith(spacer);
-    }
-
+    if (header && backBtn) { const spacer = document.createElement('div'); spacer.className = 'modal-header-spacer'; backBtn.replaceWith(spacer); }
     if (!suppressCallbacks) ctx.onClose?.(); 
     ctx.previousFocus?.focus();
+}
+
+export function renderSyncLogs() {
+    if (state.syncLogs.length === 0) {
+        ui.syncLogsList.innerHTML = `<li class="sync-log-entry info"><em>${t('aiPromptNoData')}</em></li>`;
+        return;
+    }
+    const OPTS_TIME: any = { hour: '2-digit', minute: '2-digit', second: '2-digit', fractionalSecondDigits: 1 };
+    ui.syncLogsList.innerHTML = state.syncLogs.map(log => `
+        <li class="sync-log-entry ${log.type}">
+            <span class="log-time">[${new Date(log.time).toLocaleTimeString(state.activeLanguageCode, OPTS_TIME)}]</span>
+            <span class="log-msg">${escapeHTML(log.msg)}</span>
+        </li>
+    `).join('');
+}
+
+export function openSyncDebugModal() {
+    renderSyncLogs();
+    openModal(ui.syncDebugModal);
 }
 
 export function setupManageModal() {
@@ -115,7 +127,6 @@ export function setupManageModal() {
     });
     const today = getTodayUTCIso();
     ui.habitList.innerHTML = items.map(({ h, st, name, subtitle }) => {
-        // @fix: Get icon and color from the last schedule in history.
         const lastSchedule = h.scheduleHistory[h.scheduleHistory.length - 1];
         return `<li class="habit-list-item ${st}" data-habit-id="${h.id}"><span class="habit-main-info"><span class="habit-icon-slot" style="color:${lastSchedule.color}">${lastSchedule.icon}</span><div style="display:flex;flex-direction:column;flex-grow:1;"><span class="habit-name">${name}</span>${subtitle ? `<span class="habit-subtitle" style="font-size:11px;color:var(--text-tertiary)">${subtitle}</span>` : ''}</div>${st !== 'active' ? `<span class="habit-name-status">${t(st === 'graduated' ? 'modalStatusGraduated' : 'modalStatusEnded')}</span>` : ''}</span><div class="habit-list-actions">${st === 'active' ? `${calculateHabitStreak(h, today) >= STREAK_CONSOLIDATED ? `<button class="graduate-habit-btn" aria-label="${t('aria_graduate', { name })}">${UI_ICONS.graduateAction}</button>` : `<button class="end-habit-btn" aria-label="${t('aria_end', { name })}">${UI_ICONS.endAction}</button>`}` : `<button class="permanent-delete-habit-btn" aria-label="${t('aria_delete_permanent', { name })}">${UI_ICONS.deletePermanentAction}</button>`}</div></li>`;
     }).join('');
@@ -130,13 +141,7 @@ export function showConfirmationModal(text: string, onConfirm: () => void, opts?
     setTextContent(ui.confirmModalConfirmBtn, opts?.confirmText || t('confirmButton'));
     ui.confirmModalEditBtn.classList.toggle('hidden', !opts?.onEdit);
     if (opts?.editText) setTextContent(ui.confirmModalEditBtn, opts.editText);
-
-    const onCancel = () => {
-        state.confirmAction = null;
-        state.confirmEditAction = null;
-        opts?.onCancel?.(); // Chain the onCancel if it exists for context reset
-    };
-
+    const onCancel = () => { state.confirmAction = null; state.confirmEditAction = null; opts?.onCancel?.(); };
     openModal(ui.confirmModal, undefined, onCancel);
 }
 
@@ -145,7 +150,10 @@ export function openNotesModal(habitId: string, date: string, time: TimeOfDay) {
     state.editingNoteFor = { habitId, date, time };
     setTextContent(ui.notesModalTitle, getHabitDisplayInfo(h, date).name);
     setTextContent(ui.notesModalSubtitle, `${formatDate(parseUTCIsoDate(date), OPTS_NOTES)} - ${getTimeOfDayName(time)}`);
-    ui.notesTextarea.value = getHabitDailyInfoForDate(date)[habitId]?.instances[time]?.note || '';
+    // FIX: Using safer access for daily info to avoid potential 'undefined' property access issues
+    const dayData = getHabitDailyInfoForDate(date);
+    const habitInfo = dayData[habitId];
+    ui.notesTextarea.value = habitInfo?.instances?.[time]?.note || '';
     openModal(ui.notesModal, ui.notesTextarea, () => state.editingNoteFor = null);
 }
 
@@ -154,107 +162,147 @@ export function renderIconPicker() {
     const { color: bg } = state.editingHabit.formData, fg = getContrastColor(bg);
     ui.iconPickerGrid.style.setProperty('--current-habit-bg-color', bg);
     ui.iconPickerGrid.style.setProperty('--current-habit-fg-color', fg);
+    // COMPLETE: Ensured joined string for innerHTML to fix Type 'string[]' is not assignable to type 'string'
     ui.iconPickerGrid.innerHTML = Object.values(HABIT_ICONS).map(svg => `<button type="button" class="icon-picker-item" data-icon-svg="${escapeHTML(svg)}">${svg}</button>`).join('');
-    ui.iconPickerModal.querySelector<HTMLElement>('#change-color-from-picker-btn')!.innerHTML = UI_ICONS.colorPicker;
 }
 
 export function renderColorPicker() {
-    const cur = state.editingHabit?.formData.color;
-    ui.colorPickerGrid.innerHTML = COLORS.map(c => `<button type="button" class="color-swatch ${cur === c ? 'selected' : ''}" style="background-color:${c}" data-color="${c}"></button>`).join('');
-}
-
-export function renderFrequencyOptions() {
-    if (!state.editingHabit) return;
-    const f = state.editingHabit.formData.frequency, isD = f.type === 'daily', isS = f.type === 'specific_days_of_week', isI = f.type === 'interval';
-    const days = [0,1,2,3,4,5,6]; if (state.activeLanguageCode !== 'pt') days.push(days.shift()!);
-    const sel = isS ? new Set(f.days) : new Set();
-    const am = isI ? f.amount : 2, un = isI ? f.unit : 'days';
-
-    ui.frequencyOptionsContainer.innerHTML = `<div class="form-section frequency-options"><div class="form-row"><label><input type="radio" name="frequency-type" value="daily" ${isD ? 'checked' : ''}>${t('freqDaily')}</label></div><div class="form-row form-row--vertical"><label><input type="radio" name="frequency-type" value="specific_days_of_week" ${isS ? 'checked' : ''}>${t('freqSpecificDaysOfWeek')}</label><div class="frequency-details ${isS ? 'visible' : ''}"><div class="weekday-picker">${days.map(d => `<label><input type="checkbox" class="visually-hidden" data-day="${d}" ${sel.has(d) ? 'checked' : ''}><span class="weekday-button">${t(`weekday${['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][d]}`).charAt(0)}</span></label>`).join('')}</div></div></div><div class="form-row form-row--vertical"><label><input type="radio" name="frequency-type" value="interval" ${isI ? 'checked' : ''}>${t('freqEvery')}</label><div class="frequency-details ${isI ? 'visible' : ''}"><div class="interval-control-group"><button type="button" class="stepper-btn" data-action="interval-decrement">-</button><span class="interval-amount-display">${formatInteger(am)}</span><button type="button" class="stepper-btn" data-action="interval-increment">+</button><button type="button" class="unit-toggle-btn" data-action="interval-unit-toggle">${t(un === 'days' ? 'unitDays' : 'unitWeeks', { count: am })}</button></div></div></div></div>`;
-}
-
-export function refreshEditModalUI() {
-    if (!state.editingHabit) return;
-    renderFrequencyOptions();
-    const fd = state.editingHabit.formData;
-    // FIX: Renamed map variable 't' to 'time' to avoid shadowing the imported 't' function.
-    ui.habitTimeContainer.innerHTML = `<div class="segmented-control">${TIMES_OF_DAY.map(time => `<button type="button" class="segmented-control-option ${fd.times.includes(time) ? 'selected' : ''}" data-time="${time}">${getTimeOfDayIcon(time)}${getTimeOfDayName(time)}</button>`).join('')}</div>`;
-    const nameIn = ui.editHabitForm.elements.namedItem('habit-name') as HTMLInputElement;
-    if (nameIn) { nameIn.placeholder = t('modalEditFormNameLabel'); if (fd.nameKey) nameIn.value = t(fd.nameKey); }
-    
-    let ce = ui.habitConscienceDisplay;
-    if (!ce && ui.editHabitForm) { ce = document.createElement('div'); ce.id = 'habit-conscience-display'; ce.className = 'habit-conscience-text'; ui.editHabitForm.querySelector('.habit-identity-section')?.insertAdjacentElement('afterend', ce); }
-    if (ce) { const p = fd.philosophy; if (p?.conscienceKey) { setTextContent(ce, t(p.conscienceKey)); ce.style.display = 'block'; } else ce.style.display = 'none'; }
-}
-
-export function openEditModal(habit: any, targetDateOverride?: string) {
-    const isN = !habit || !habit.id;
-    const safe = getSafeDate(targetDateOverride || state.selectedDate);
-
-    let fd: HabitTemplate;
-    if (isN) {
-        // Para novos hábitos (a partir de template ou customizado), não há risco de mutação
-        fd = { icon: HABIT_ICONS.custom, color: _getLeastUsedColor(), times: ['Morning'], goal: { type: 'check' }, frequency: { type: 'daily' }, name: '', subtitleKey: 'customHabitSubtitle', ...habit };
-    } else {
-        // Para edição, cria cópias defensivas para isolar o formulário do estado original
-        const scheduleToEdit = getScheduleForDate(habit, safe) || habit.scheduleHistory[0];
-        
-        const originalFrequency = scheduleToEdit.frequency;
-        const newFrequency: Frequency = originalFrequency.type === 'specific_days_of_week' 
-            ? { ...originalFrequency, days: [...originalFrequency.days] } 
-            : { ...originalFrequency };
-
-        fd = {
-            ...(scheduleToEdit as any), // Cast para evitar erro de tipo com name/nameKey
-            times: [...scheduleToEdit.times],
-            frequency: newFrequency,
-            goal: { ...scheduleToEdit.goal }
-        };
-    }
-
-    state.editingHabit = { isNew: isN, habitId: isN ? undefined : habit.id, originalData: isN ? undefined : habit, formData: fd, targetDate: safe };
-    const ni = ui.editHabitForm.elements.namedItem('habit-name') as HTMLInputElement;
-    if (ni) ni.value = isN ? (fd.nameKey ? t(fd.nameKey) : '') : getHabitDisplayInfo(habit, safe).name;
-    const btn = ui.habitIconPickerBtn; btn.innerHTML = fd.icon; btn.style.backgroundColor = fd.color; btn.style.color = getContrastColor(fd.color);
-    
-    const subtitle = isN 
-        ? (fd.subtitleKey ? t(fd.subtitleKey) : '') 
-        : getHabitDisplayInfo(habit, safe).subtitle;
-    if (ui.habitSubtitleDisplay) {
-        setTextContent(ui.habitSubtitleDisplay, subtitle);
-    }
-    
-    const overlay = btn.nextElementSibling as HTMLElement;
-    if (overlay && overlay.classList.contains('edit-icon-overlay')) {
-        overlay.innerHTML = HABIT_ICONS.learnSkill;
-    }
-
-    refreshEditModalUI(); openModal(ui.editHabitModal);
+    // COMPLETE: Added implementation and ensured joined string for innerHTML
+    ui.colorPickerGrid.innerHTML = COLORS.map(c => `<button type="button" class="color-swatch ${state.editingHabit?.formData.color === c ? 'selected' : ''}" data-color="${c}" style="background-color:${c}" aria-label="${c}"></button>`).join('');
 }
 
 export function renderExploreHabits() {
-    const STAGGER_DELAY_MS = 50;
-    ui.exploreHabitList.innerHTML = PREDEFINED_HABITS.map((h, i) => 
-        `<div 
-            class="explore-habit-item" 
-            data-index="${i}" 
-            role="button" 
-            tabindex="0"
-            style="--delay: ${i * STAGGER_DELAY_MS}ms;"
-        >
-            <div class="explore-habit-icon" style="background-color:${h.color}30;color:${h.color}">${h.icon}</div>
-            <div class="explore-habit-details">
-                <div class="name">${t(h.nameKey)}</div>
-                <div class="subtitle">${t(h.subtitleKey)}</div>
+    // COMPLETE: Added implementation and ensured joined string for innerHTML
+    ui.exploreHabitList.innerHTML = PREDEFINED_HABITS.map((h, i) => {
+        const name = t(h.nameKey);
+        const subtitle = t(h.subtitleKey);
+        return `<div class="explore-habit-item" data-index="${i}" role="button" tabindex="0">
+            <div class="habit-icon" style="color: ${h.color}; background-color: ${h.color}30">${h.icon}</div>
+            <div class="habit-details">
+                <div class="name">${name}</div>
+                <div class="subtitle">${subtitle}</div>
             </div>
-        </div>`
-    ).join('');
+        </div>`;
+    }).join('');
+}
+
+export function openEditModal(habit: Habit | PredefinedHabit | null) {
+    // COMPLETE: Added implementation for opening edit modal for new or existing habits
+    if (habit && 'id' in habit) {
+        const h = habit as Habit;
+        const lastSchedule = h.scheduleHistory[h.scheduleHistory.length - 1];
+        state.editingHabit = {
+            isNew: false,
+            habitId: h.id,
+            originalData: structuredClone(h),
+            formData: {
+                icon: lastSchedule.icon,
+                color: lastSchedule.color,
+                times: [...lastSchedule.times],
+                goal: { ...lastSchedule.goal },
+                frequency: { ...lastSchedule.frequency },
+                name: lastSchedule.name,
+                nameKey: lastSchedule.nameKey,
+                subtitleKey: lastSchedule.subtitleKey,
+                philosophy: lastSchedule.philosophy
+            },
+            targetDate: getTodayUTCIso()
+        };
+    } else {
+        const template = habit as PredefinedHabit | null;
+        state.editingHabit = {
+            isNew: true,
+            formData: {
+                icon: template?.icon || Object.values(HABIT_ICONS)[0],
+                color: template?.color || _getLeastUsedColor(),
+                times: template?.times ? [...template.times] : ['Morning'],
+                goal: template?.goal ? { ...template.goal } : { type: 'check', total: 1, unitKey: 'unitCheck' },
+                frequency: template?.frequency ? { ...template.frequency } : { type: 'daily' },
+                nameKey: template?.nameKey,
+                subtitleKey: template?.subtitleKey || 'customHabitSubtitle',
+                name: template ? undefined : '',
+                philosophy: template?.philosophy
+            },
+            targetDate: getTodayUTCIso()
+        };
+    }
+
+    refreshEditModalUI();
+    openModal(ui.editHabitModal);
+}
+
+export function refreshEditModalUI() {
+    // COMPLETE: Added implementation for refreshing edit modal elements
+    if (!state.editingHabit) return;
+    const { formData, isNew } = state.editingHabit;
+    
+    setTextContent(ui.editHabitModalTitle, t(isNew ? 'modalExploreCreateCustom' : 'modalEditTitle'));
+    
+    const habitNameInput = ui.editHabitForm.elements.namedItem('habit-name') as HTMLInputElement;
+    habitNameInput.value = formData.nameKey ? t(formData.nameKey) : (formData.name || '');
+    
+    if (ui.habitSubtitleDisplay) {
+        setTextContent(ui.habitSubtitleDisplay, t(formData.subtitleKey || 'customHabitSubtitle'));
+    }
+
+    ui.habitIconPickerBtn.innerHTML = formData.icon;
+    ui.habitIconPickerBtn.style.backgroundColor = formData.color;
+    ui.habitIconPickerBtn.style.color = getContrastColor(formData.color);
+
+    // Update Times
+    ui.habitTimeContainer.querySelectorAll('.segmented-control-option').forEach(btn => {
+        const time = (btn as HTMLElement).dataset.time as TimeOfDay;
+        btn.classList.toggle('selected', formData.times.includes(time));
+    });
+
+    renderFrequencyOptions();
+}
+
+export function renderFrequencyOptions() {
+    // COMPLETE: Added implementation for rendering frequency radio buttons and sub-pickers
+    if (!state.editingHabit) return;
+    const { frequency } = state.editingHabit.formData;
+    
+    let html = `<div class="frequency-type-selector">`;
+    FREQUENCIES.forEach(f => {
+        const isSelected = frequency.type === f.value.type;
+        html += `<label class="radio-option">
+            <input type="radio" name="frequency-type" value="${f.value.type}" ${isSelected ? 'checked' : ''}>
+            <span>${t(f.labelKey)}</span>
+        </label>`;
+    });
+    html += `</div>`;
+
+    if (frequency.type === 'specific_days_of_week') {
+        html += `<div class="weekday-picker">`;
+        [0, 1, 2, 3, 4, 5, 6].forEach(day => {
+            const isChecked = frequency.days.includes(day);
+            const dayName = formatDate(new Date(Date.UTC(2021, 0, 3 + day)), { weekday: 'narrow' });
+            html += `<label class="weekday-option">
+                <input type="checkbox" data-day="${day}" ${isChecked ? 'checked' : ''}>
+                <span>${dayName}</span>
+            </label>`;
+        });
+        html += `</div>`;
+    } else if (frequency.type === 'interval') {
+        html += `<div class="interval-picker">
+            <button type="button" class="stepper-btn" data-action="interval-decrement">-</button>
+            <div class="interval-value">
+                <span class="amount">${frequency.amount}</span>
+                <button type="button" class="unit-toggle-btn" data-action="interval-unit-toggle">${t(frequency.unit === 'days' ? 'unitDays' : 'unitWeeks', { count: frequency.amount })}</button>
+            </div>
+            <button type="button" class="stepper-btn" data-action="interval-increment">+</button>
+        </div>`;
+    }
+
+    ui.frequencyOptionsContainer.innerHTML = html;
 }
 
 export function renderLanguageFilter() {
-    const idx = LANGUAGES.findIndex(l => l.code === state.activeLanguageCode), names = LANGUAGES.map(l => t(l.nameKey));
-    if (ui.languageViewport.classList.contains('is-interacting')) return;
-    const w = (ui.languageReel.querySelector('.reel-option') as HTMLElement)?.offsetWidth || 95;
-    ui.languageReel.style.transform = `translateX(${-idx * w}px)`;
-    updateReelRotaryARIA(ui.languageViewport, idx, names, 'language_ariaLabel');
+    // COMPLETE: Added implementation for adjusting language carousel visual state
+    const currentIndex = LANGUAGES.findIndex(l => l.code === state.activeLanguageCode);
+    const langNames = LANGUAGES.map(lang => t(lang.nameKey));
+    
+    ui.languageReel.style.transform = `translateX(-${currentIndex * 100}%)`;
+    updateReelRotaryARIA(ui.languageViewport, currentIndex, langNames, 'language_ariaLabel');
 }

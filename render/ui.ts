@@ -7,14 +7,6 @@
 /**
  * @file render/ui.ts
  * @description Registro Central de Referências DOM (UI Registry).
- * 
- * [MAIN THREAD CONTEXT]:
- * Este módulo atua como um cache inteligente (Lazy-Loaded) para referências de elementos DOM.
- * 
- * ARQUITETURA (Lazy Singleton & O(1) Access):
- * - **Lazy Access:** Elementos só são consultados no DOM (`querySelector`) na primeira vez que são acessados.
- * - **Memoization:** Referências são cacheadas em `uiCache`, tornando acessos subsequentes instantâneos.
- * - **Type Safety:** Interface `UIElements` garante autocompletar e verificação de tipos em todo o projeto.
  */
 
 export interface UIElements {
@@ -114,6 +106,10 @@ export interface UIElements {
     colorPickerTitle: HTMLElement;
     syncErrorMsg: HTMLElement;
     
+    // Debug Sync
+    syncDebugModal: HTMLElement;
+    syncLogsList: HTMLElement;
+    
     // Dynamic Injected Elements
     habitConscienceDisplay: HTMLElement;
     
@@ -138,44 +134,21 @@ export interface UIElements {
     }
 }
 
-// MEMORY: Cache "Flat" para acesso O(1).
-// Usamos 'any' internamente para evitar overhead de tipos complexos no runtime.
 const uiCache: Record<string, Element> = {};
 const chartCache: Record<string, Element> = {};
 
-/**
- * Utilitário de consulta DOM otimizado (Micro-optimization).
- * @param selector String seletora CSS.
- */
 function queryElement(selector: string): Element {
-    // PERFORMANCE OPTIMIZATION: Hybrid Selector Strategy.
-    // Detectamos seletores de ID simples para usar o caminho rápido (Fast Path).
-    const isSimpleId = selector.charCodeAt(0) === 35 /* # */ && !/[\s.\[]/.test(selector);
-    
-    const element = isSimpleId
-        ? document.getElementById(selector.slice(1))
-        : document.querySelector(selector);
-
-    // ROBUSTNESS [2025-06-03]: Silent fail for dynamic elements that might be injected later.
-    // O elemento habit-conscience-display é injetado via JS, então pode não existir no first boot.
-    // Retornamos undefined/null implicitamente se não achar, para ser tratado no render.
+    const isSimpleId = selector.charCodeAt(0) === 35 && !/[\s.\[]/.test(selector);
+    const element = isSimpleId ? document.getElementById(selector.slice(1)) : document.querySelector(selector);
     if (!element && selector !== '#habit-conscience-display' && selector !== '#habit-subtitle-display') {
         throw new Error(`UI element "${selector}" not found.`);
     }
     return element as Element;
 }
 
-/**
- * Configura um getter lazy no objeto alvo.
- * @param target Objeto onde a propriedade será definida.
- * @param prop Nome da propriedade.
- * @param selector Seletor CSS.
- * @param cache Objeto de cache a ser usado.
- */
 function defineLazy(target: any, prop: string, selector: string, cache: Record<string, Element>) {
     Object.defineProperty(target, prop, {
         get: function() {
-            // Check cache direct property access (Fastest in V8)
             if (cache[prop] === undefined) {
                 const el = queryElement(selector);
                 if (el) cache[prop] = el;
@@ -188,11 +161,8 @@ function defineLazy(target: any, prop: string, selector: string, cache: Record<s
     });
 }
 
-// Inicializa o objeto UI
 export const ui = {} as UIElements;
 
-// --- ROOT ELEMENTS DEFINITION ---
-// Batch definition avoids creating intermediate objects.
 defineLazy(ui, 'appContainer', '.app-container', uiCache);
 defineLazy(ui, 'calendarStrip', '#calendar-strip', uiCache);
 defineLazy(ui, 'headerTitle', '#header-title', uiCache);
@@ -289,8 +259,9 @@ defineLazy(ui, 'iconPickerTitle', '#icon-picker-modal-title', uiCache);
 defineLazy(ui, 'colorPickerTitle', '#color-picker-modal-title', uiCache);
 defineLazy(ui, 'habitConscienceDisplay', '#habit-conscience-display', uiCache);
 defineLazy(ui, 'syncErrorMsg', '#sync-error-msg', uiCache);
+defineLazy(ui, 'syncDebugModal', '#sync-debug-modal', uiCache);
+defineLazy(ui, 'syncLogsList', '#sync-logs-list', uiCache);
 
-// --- CHART ELEMENTS SUB-OBJECT ---
 ui.chart = {} as UIElements['chart'];
 defineLazy(ui.chart, 'title', '#chart-container .chart-title', chartCache);
 defineLazy(ui.chart, 'subtitle', '#chart-container .app-subtitle', chartCache);

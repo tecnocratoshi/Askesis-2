@@ -1,8 +1,7 @@
-
 /**
  * @license
  * SPDX-License-Identifier: Apache-2.0
- * VERSÃO: V18.6 - Robust Error Handling
+ * VERSÃO: V18.8 - Enhanced Telemetry & Main Sync Compression
  */
 
 import { AppState, state, getPersistableState } from '../state';
@@ -12,11 +11,21 @@ import { t } from '../i18n';
 import { hasLocalSyncKey, getSyncKey, apiFetch } from './api';
 import { encrypt, decrypt } from './crypto';
 import { mergeStates } from './dataMerge';
-import { compressToBuffer, decompressFromBuffer, decompressString } from '../utils';
+import { compressToBuffer, decompressFromBuffer, arrayBufferToBase64, base64ToArrayBuffer } from '../utils';
 
 const DEBOUNCE_DELAY = 2000;
+const MAX_LOG_SIZE = 100; // Increased for more detail
 let syncTimeout: any = null;
 let isSyncInProgress = false;
+
+// --- TELEMETRY LOGGING ---
+
+function addSyncLog(msg: string, type: 'info' | 'error' | 'success' = 'info') {
+    state.syncLogs.unshift({ time: Date.now(), msg, type });
+    if (state.syncLogs.length > MAX_LOG_SIZE) state.syncLogs.pop();
+    // Non-blocking notification for UI to potentially refresh logs if open
+    document.dispatchEvent(new CustomEvent('sync-logs-updated'));
+}
 
 // --- SERIALIZATION ENGINE ---
 
@@ -59,66 +68,36 @@ const TASKS: Record<string, (payload: any) => Promise<any> | any> = {
         };
     },
     'archive': async (payload: any) => {
-        // Payload: Record<year, { additions: DailyData, base: string|Uint8Array|Object }>
         const result: Record<string, Uint8Array> = {};
         const years = Object.keys(payload);
-
         for (const year of years) {
             const { additions, base } = payload[year];
             let baseObj = {};
-
-            // 1. Hydrate Base (Decompress if needed)
             if (base) {
                 if (typeof base === 'object' && !(base instanceof Uint8Array)) {
-                    baseObj = base; // Already hydrated (from cache)
+                    baseObj = base;
                 } else {
                     try {
                         let jsonStr = '';
-                        if (base instanceof Uint8Array) {
-                            jsonStr = await decompressFromBuffer(base);
-                        } else if (typeof base === 'string') {
-                            // Legacy support
-                            jsonStr = base.startsWith('GZIP:') 
-                                ? await decompressString(base.substring(5))
-                                : base;
-                        }
+                        if (base instanceof Uint8Array) jsonStr = await decompressFromBuffer(base);
+                        else if (typeof base === 'string') jsonStr = base.startsWith('GZIP:') ? await decompressFromBuffer(base64ToArrayBuffer(base.substring(5))) : base;
                         baseObj = JSON.parse(jsonStr);
-                    } catch (e) {
-                        console.warn(`[Cloud] Archive corruption for ${year}, resetting base.`, e);
-                        baseObj = {};
-                    }
+                    } catch (e) { baseObj = {}; }
                 }
             }
-
-            // 2. Merge Additions
             const merged = { ...baseObj, ...additions };
-
-            // 3. Compress Result (GZIP Buffer)
-            // This ensures state.archives remains lightweight
             try {
                 const compressed = await compressToBuffer(JSON.stringify(merged));
                 result[year] = compressed;
-            } catch (e) {
-                console.error(`[Cloud] Compression failed for ${year}`, e);
-                // In worst case, we lose the archive optimization but save data
-                // Note: The app expects Uint8Array or String in archives.
-                // We'll throw to prevent saving corrupted state.
-                throw e;
-            }
+            } catch (e) { throw e; }
         }
         return result;
     },
-    'prune-habit': (payload: any) => {
-        // Simplificado: Apenas retorna os arquivos como estão,
-        // pois a limpeza real de chaves órfãs é complexa sem descompressão total.
-        // Em V18, aceitamos manter dados órfãos em archives (cold storage) para evitar overhead de CPU.
-        return payload.archives;
-    }
+    'prune-habit': (payload: any) => payload.archives
 };
 
 export function runWorkerTask<T>(type: string, payload: any): Promise<T> {
     return new Promise((resolve, reject) => {
-        // Scheduler API or SetTimeout
         const scheduler = (window as any).scheduler;
         const runner = async () => {
             try {
@@ -126,55 +105,55 @@ export function runWorkerTask<T>(type: string, payload: any): Promise<T> {
                 if (!handler) throw new Error(`Unknown task: ${type}`);
                 const result = await handler(payload);
                 resolve(result);
-            } catch (e) {
-                reject(e);
-            }
+            } catch (e) { reject(e); }
         };
-
-        if (scheduler?.postTask) {
-            scheduler.postTask(runner, { priority: 'background' });
-        } else {
-            setTimeout(runner, 0);
-        }
+        if (scheduler?.postTask) scheduler.postTask(runner, { priority: 'background' });
+        else setTimeout(runner, 0);
     });
 }
-
-export function prewarmWorker() {}
 
 // --- SYNC STATUS UI ---
 
 export function setSyncStatus(statusKey: 'syncSaving' | 'syncSynced' | 'syncError' | 'syncInitial' | 'syncing') {
-    state.syncState = statusKey === 'syncing' ? 'syncSaving' : statusKey;
+    state.syncState = statusKey === 'syncing' ? 'syncSaving' : (statusKey as any);
     const displayKey = statusKey === 'syncing' ? 'syncSaving' : statusKey;
-    
     if (ui.syncStatus) ui.syncStatus.textContent = t(displayKey);
-    
-    if (statusKey === 'syncError' && ui.syncErrorMsg) {
-        ui.syncErrorMsg.textContent = state.syncLastError || t('syncError');
-        ui.syncErrorMsg.classList.remove('hidden');
-    } else if (ui.syncErrorMsg) {
-        ui.syncErrorMsg.classList.add('hidden');
-    }
 }
 
 // --- CLOUD SYNC CORE ---
 
 export async function downloadRemoteState(key: string): Promise<AppState | null> {
     try {
+        addSyncLog("Solicitando dados da nuvem...", "info");
         const res = await apiFetch('/api/sync', { method: 'GET' }, true);
+        if (res.status === 404) { addSyncLog("Nenhum dado encontrado no servidor.", "info"); return null; }
+        if (res.status === 401) throw new Error("Não autorizado: Verifique sua chave.");
+        if (!res.ok) throw new Error(`Servidor respondeu com erro ${res.status}`);
         
-        if (res.status === 404) return null;
-        if (res.status === 401) throw new Error("Chave Inválida (401)");
-        if (!res.ok) throw new Error(`Erro HTTP ${res.status}`);
-
         const data = await res.json();
-        if (!data || !data.state) return null;
+        if (!data || !data.state) { addSyncLog("Payload da nuvem vazio."); return null; }
+        
+        const encryptedLen = data.state.length;
+        addSyncLog(`Descarga completa: ${Math.round(encryptedLen / 1024)}KB recebidos (Criptografados).`);
+        
+        addSyncLog("Iniciando decriptografia...", "info");
+        let jsonString = await decrypt(data.state, key);
+        addSyncLog("Decriptografia AES-GCM concluída.");
 
-        const jsonString = await decrypt(data.state, key);
+        // Check for GZIP compression header
+        if (jsonString.startsWith('GZIP:')) {
+            const compressedB64 = jsonString.substring(5);
+            addSyncLog(`Detectado payload comprimido (${Math.round(compressedB64.length / 1024)}KB). Descomprimindo...`, "info");
+            const buffer = base64ToArrayBuffer(compressedB64);
+            jsonString = await decompressFromBuffer(buffer);
+            addSyncLog(`Descompressão finalizada: ${Math.round(jsonString.length / 1024)}KB de dados puros (JSON).`, "success");
+        } else {
+            addSyncLog(`Payload não comprimido: ${Math.round(jsonString.length / 1024)}KB de JSON.`);
+        }
+
         return JSON.parse(jsonString, _jsonReviver);
-
-    } catch (e) {
-        console.error("Download/Decrypt Failed:", e);
+    } catch (e: any) {
+        addSyncLog(`Erro na descarga/processamento: ${e.message}`, "error");
         throw e;
     }
 }
@@ -183,35 +162,26 @@ export async function fetchStateFromCloud(): Promise<AppState | null> {
     if (!hasLocalSyncKey()) return null;
     const key = getSyncKey();
     if (!key) return null;
-
     try {
         setSyncStatus('syncing');
-        
         const remoteState = await downloadRemoteState(key);
+        if (!remoteState) { setSyncStatus('syncSynced'); return null; }
         
-        if (!remoteState) {
-            setSyncStatus('syncSynced');
-            return null;
-        }
-
         const localState = getPersistableState();
-        // Fix: Ensure Maps exist for merge
-        if (!localState.monthlyLogs && state.monthlyLogs) {
-            localState.monthlyLogs = state.monthlyLogs;
-        }
-
+        if (!localState.monthlyLogs && state.monthlyLogs) localState.monthlyLogs = state.monthlyLogs;
+        
+        addSyncLog("Iniciando fusão de dados (Merge)...", "info");
         const mergedState = await mergeStates(localState, remoteState);
-
+        
+        addSyncLog("Atualizando estado local e persistência...", "info");
         Object.assign(state, mergedState);
         await persistStateLocally(mergedState);
         
         document.dispatchEvent(new CustomEvent('render-app'));
         setSyncStatus('syncSynced');
-        
+        addSyncLog("Sincronização de entrada (PULL) concluída com sucesso.", "success");
         return mergedState;
-
     } catch (e: any) {
-        console.error("Cloud Pull Failed:", e);
         state.syncLastError = e.message;
         setSyncStatus('syncError');
         return null;
@@ -221,68 +191,66 @@ export async function fetchStateFromCloud(): Promise<AppState | null> {
 async function _performSync() {
     const key = getSyncKey();
     if (!key) return;
-
     try {
         isSyncInProgress = true;
         setSyncStatus('syncing');
-
+        addSyncLog("Preparando snapshot para envio...", "info");
+        
         const rawState = getPersistableState();
         rawState.monthlyLogs = state.monthlyLogs;
+        let finalPayload = JSON.stringify(rawState, _jsonReplacer);
+        const rawSize = finalPayload.length;
+        addSyncLog(`JSON serializado: ${Math.round(rawSize/1024)}KB.`);
 
-        const jsonString = JSON.stringify(rawState, _jsonReplacer);
-        const encryptedData = await encrypt(jsonString, key);
+        // Apply Compression
+        addSyncLog("Comprimindo dados (GZIP Stream API)...", "info");
+        const compressedBuffer = await compressToBuffer(finalPayload);
+        const compressedB64 = arrayBufferToBase64(compressedBuffer);
+        finalPayload = "GZIP:" + compressedB64;
+        const compSize = finalPayload.length;
+        const ratio = Math.round((1 - compSize / rawSize) * 100);
+        addSyncLog(`Compressão concluída: ${Math.round(compSize/1024)}KB (${ratio}% de economia).`, "info");
 
-        const payload = {
-            lastModified: Date.now(),
-            state: encryptedData
-        };
+        addSyncLog("Criptografando payload com AES-GCM...", "info");
+        const encryptedData = await encrypt(finalPayload, key);
+        addSyncLog(`Criptografia finalizada: ${Math.round(encryptedData.length/1024)}KB prontos para envio.`);
 
-        const res = await apiFetch('/api/sync', {
-            method: 'POST',
-            body: JSON.stringify(payload)
+        addSyncLog("Enviando para o servidor (POST /api/sync)...", "info");
+        const res = await apiFetch('/api/sync', { 
+            method: 'POST', 
+            body: JSON.stringify({ 
+                lastModified: Date.now(), 
+                state: encryptedData 
+            }) 
         }, true);
 
         if (res.status === 409) {
-            console.warn("Conflict (409). Pulling newer version...");
-            // AUTO-MERGE STRATEGY: Pull, Merge, then (implicitly) user can save again later.
+            addSyncLog("Conflito detectado (409): O servidor possui uma versão mais recente.", "error");
             await fetchStateFromCloud(); 
-        } else if (res.status === 413) {
-            throw new Error("Dados muito grandes (413).");
-        } else if (res.status === 401) {
-            throw new Error("Não autorizado (401). Verifique a chave.");
         } else if (!res.ok) {
-            throw new Error(`Erro Servidor: ${res.status}`);
+            throw new Error(`Erro de rede: ${res.status}`);
         } else {
             setSyncStatus('syncSynced');
             state.syncLastError = null;
+            addSyncLog("Sincronização de saída (PUSH) concluída com sucesso.", "success");
         }
-
     } catch (e: any) {
-        console.error("Sync Push Failed:", e);
-        if (e instanceof TypeError && e.message.includes('BigInt')) {
-            state.syncLastError = "Erro de Serialização";
-        } else {
-            state.syncLastError = e.message || "Erro de Conexão";
-        }
+        state.syncLastError = e.message || "Erro desconhecido";
         setSyncStatus('syncError');
-    } finally {
-        isSyncInProgress = false;
+        addSyncLog(`Falha no envio: ${state.syncLastError}`, "error");
+    } finally { 
+        isSyncInProgress = false; 
     }
 }
 
 export function syncStateWithCloud(currentState?: AppState, immediate = false) {
     if (!hasLocalSyncKey()) return;
-    
     if (syncTimeout) clearTimeout(syncTimeout);
-    
-    if (immediate) {
-        console.log("[Cloud] Immediate sync trigger.");
-        _performSync();
-    } else {
-        syncTimeout = setTimeout(() => _performSync(), DEBOUNCE_DELAY);
-    }
+    if (immediate) _performSync();
+    else syncTimeout = setTimeout(() => _performSync(), DEBOUNCE_DELAY);
 }
 
 if (hasLocalSyncKey()) {
-    setTimeout(fetchStateFromCloud, 1500);
+    // Initial delay for smooth boot
+    setTimeout(fetchStateFromCloud, 2000);
 }
