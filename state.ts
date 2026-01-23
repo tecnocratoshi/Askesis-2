@@ -1,3 +1,4 @@
+
 /**
  * @license
  * SPDX-License-Identifier: Apache-2.0
@@ -137,6 +138,12 @@ export interface DaySummary {
     readonly showPlusIndicator: boolean;
 }
 
+export interface SyncLog {
+    time: number;
+    msg: string;
+    type: 'success' | 'error' | 'info';
+}
+
 // --- BITMASK STRUCTURES ---
 export const PERIOD_OFFSET = { Morning: 0, Afternoon: 2, Evening: 4 } as const;
 export const HABIT_STATE = { NULL: 0, DONE: 1, DEFERRED: 2, DONE_PLUS: 3 } as const;
@@ -158,6 +165,8 @@ export interface AppState {
     readonly pending21DayHabitIds: readonly string[];
     readonly pendingConsolidationHabitIds: readonly string[];
     readonly quoteState?: QuoteDisplayState;
+    readonly hasOnboarded: boolean; // Flag to prevent recreation of default habits
+    readonly syncLogs?: SyncLog[];
     monthlyLogs?: Map<string, bigint>;
 }
 
@@ -215,6 +224,8 @@ export const state: {
     pending21DayHabitIds: string[];
     pendingConsolidationHabitIds: string[];
     notificationsShown: string[];
+    hasOnboarded: boolean; // Flag to distinguish empty vs new
+    syncLogs: SyncLog[];
     confirmAction: (() => void) | null;
     confirmEditAction: (() => void) | null;
     editingNoteFor: { habitId: string; date: string; time: TimeOfDay; } | null;
@@ -261,6 +272,8 @@ export const state: {
     pending21DayHabitIds: [],
     pendingConsolidationHabitIds: [],
     notificationsShown: [],
+    hasOnboarded: false,
+    syncLogs: [],
     confirmAction: null,
     confirmEditAction: null,
     editingNoteFor: null,
@@ -297,9 +310,6 @@ export function invalidateChartCache() {
 }
 
 export function getPersistableState(): AppState {
-    // MONOTONIC CLOCK LOGIC: Ensure lastModified always moves forward.
-    // If the system clock is behind the last known state (due to clock skew or device switch),
-    // we increment manually to guarantee the server accepts the update as newer.
     const now = Date.now();
     if (now > state.lastModified) {
         state.lastModified = now;
@@ -318,6 +328,8 @@ export function getPersistableState(): AppState {
         pending21DayHabitIds: state.pending21DayHabitIds,
         pendingConsolidationHabitIds: state.pendingConsolidationHabitIds,
         quoteState: state.quoteState,
+        hasOnboarded: state.hasOnboarded,
+        syncLogs: state.syncLogs.slice(-50), // Persiste apenas os últimos 50 logs para evitar bloat
     };
 }
 

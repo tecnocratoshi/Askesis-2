@@ -18,15 +18,11 @@ const CORS_HEADERS = {
   'Access-Control-Allow-Headers': 'Content-Type',
 };
 
-const API_KEY = process.env.API_KEY;
 const MODEL_NAME = 'gemini-3-flash-preview';
-let aiClient: GoogleGenAI | null = null;
 
 export default async function handler(req: Request) {
     if (req.method === 'OPTIONS') return new Response(null, { status: 204, headers: CORS_HEADERS });
     if (req.method !== 'POST') return new Response(null, { status: 405 });
-
-    if (!API_KEY) return new Response(JSON.stringify({ error: 'Server Configuration' }), { status: 500, headers: CORS_HEADERS });
 
     try {
         // CHAOS DEFENSE: Timeout de leitura do prompt para evitar workers pendentes
@@ -43,13 +39,14 @@ export default async function handler(req: Request) {
 
         if (!prompt || !systemInstruction) return new Response(null, { status: 400 });
 
-        if (!aiClient) aiClient = new GoogleGenAI({ apiKey: API_KEY });
+        // Always use process.env.API_KEY directly when initializing the client instance
+        const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
 
         // PROTEÇÃO CONTRA ZUMBIFICAÇÃO: Timeout de execução da IA
         const controller = new AbortController();
         const timeoutId = setTimeout(() => controller.abort(), 25000);
 
-        const geminiResponse = await aiClient.models.generateContent({
+        const geminiResponse = await ai.models.generateContent({
             model: MODEL_NAME,
             contents: prompt,
             config: { 

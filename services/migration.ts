@@ -1,3 +1,4 @@
+
 /**
  * @license
  * SPDX-License-Identifier: Apache-2.0
@@ -6,11 +7,6 @@
 /**
  * @file services/migration.ts
  * @description Inicializador de Estado e Sanitizador de Schema.
- * 
- * [MAIN THREAD CONTEXT]:
- * Como não há dados legados de produção, este módulo atua apenas para garantir
- * a integridade estrutural do estado (Schema Enforcement) e inicializar
- * estruturas de dados runtime (como Maps) corretamente.
  */
 
 import { AppState } from '../state';
@@ -28,20 +24,24 @@ export function migrateState(loadedState: any, targetVersion: number): AppState 
             notificationsShown: [], 
             pending21DayHabitIds: [], 
             pendingConsolidationHabitIds: [], 
-            monthlyLogs: new Map() // Bitmask Init
+            hasOnboarded: false, // Start as false for fresh installs
+            monthlyLogs: new Map() 
         } as AppState;
     }
 
     // 2. SCHEMA ENFORCEMENT & HYDRATION
-    // Garante que o estado carregado tenha a estrutura mínima necessária para a versão atual.
-    // Não realizamos migrações de dados antigos pois assumimos "Greenfield" (sem legado V1-V6).
-    
     const state = loadedState as AppState;
 
-    // DATA INTEGRITY: Garante que monthlyLogs seja sempre um Map,
-    // recuperando de possíveis serializações incorretas (JSON Object).
+    // DATA INTEGRITY: monthlyLogs
     if (!state.monthlyLogs || !(state.monthlyLogs instanceof Map)) {
         state.monthlyLogs = new Map();
+    }
+
+    // ONBOARDING INTEGRITY: 
+    // If the flag is missing, we check if they already have habits. 
+    // If they have habits, they have definitely onboarded already.
+    if ((state as any).hasOnboarded === undefined) {
+        (state as any).hasOnboarded = state.habits && state.habits.length > 0;
     }
 
     // Força a versão atual

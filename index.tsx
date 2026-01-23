@@ -21,7 +21,7 @@ import './css/forms.css';
 import './css/modals.css';
 
 import { state, AppState } from './state';
-import { loadState, persistStateLocally, registerSyncHandler } from './services/persistence';
+import { loadState, persistStateLocally, registerSyncHandler, saveState } from './services/persistence';
 import { renderApp, initI18n, updateUIText } from './render';
 import { setupEventListeners } from './listeners';
 import { createDefaultHabit, handleDayTransition, performArchivalCheck } from './services/habitActions';
@@ -87,12 +87,21 @@ async function loadInitialState() {
 }
 
 function handleFirstTimeUser() {
-    if (state.habits.length === 0) {
-        // Se tem chave mas deu erro, não cria default (pode estar baixando ainda)
-        if (hasLocalSyncKey() && state.syncState === 'syncError') {
-            return;
+    // LÓGICA DE PERSISTÊNCIA DE ZERO STATE [2025-06-03]
+    // Se o usuário nunca inicializou o app (falso no schema), criamos o default.
+    // Se ele já inicializou e a lista está vazia, respeitamos a vontade dele de ter zero hábitos.
+    if (!state.hasOnboarded) {
+        if (state.habits.length === 0) {
+            // Se tem chave mas deu erro, não cria default (pode estar baixando ainda)
+            if (hasLocalSyncKey() && state.syncState === 'syncError') {
+                return;
+            }
+            createDefaultHabit();
         }
-        createDefaultHabit();
+        // Uma vez que o app rodou a primeira vez e o fluxo de boas-vindas (habito default) 
+        // foi processado ou ignorado por sync, marcamos como inicializado.
+        state.hasOnboarded = true;
+        saveState();
     }
 }
 
