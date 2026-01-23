@@ -16,8 +16,7 @@ export default defineConfig(({ mode }) => {
       },
       resolve: {
         alias: {
-          // Fixed: __dirname is not available in Node ESM. Using path.resolve('.') for root alias.
-          '@': path.resolve('.'),
+          '@': path.resolve(__dirname, '.'),
         }
       }
     };

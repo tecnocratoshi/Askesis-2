@@ -2,206 +2,316 @@
 /**
  * @license
  * SPDX-License-Identifier: Apache-2.0
-*/
-
-/**
- * @file cloud.ts
- * @description Orquestrador de Sincronização e Ponte para Web Workers (Main Thread Client).
  */
 
 import { AppState, state, getPersistableState } from '../state';
-import { loadState, persistStateLocally } from './persistence';
-import { pushToOneSignal, generateUUID } from '../utils';
+import { persistStateLocally } from './persistence';
 import { ui } from '../render/ui';
 import { t } from '../i18n';
 import { hasLocalSyncKey, getSyncKey, apiFetch } from './api';
-import { renderApp, updateNotificationUI } from '../render';
+import { encrypt, decrypt } from './crypto';
 import { mergeStates } from './dataMerge';
+import { compressToBuffer, decompressFromBuffer, decompressString } from '../utils';
 
-// PERFORMANCE: Debounce para evitar salvar na nuvem a cada pequena alteração
-let syncTimeout: number | null = null;
-const DEBOUNCE_DELAY = 2000; 
-
+const DEBOUNCE_DELAY = 2000;
+let syncTimeout: any = null;
 let isSyncInProgress = false;
-let pendingSyncState: AppState | null = null;
 
-// --- TELEMETRY ---
-/**
- * Adiciona um log estruturado ao sistema de telemetria com suporte a ícones e cores.
- */
-export function addSyncLog(msg: string, type: 'success' | 'error' | 'info' = 'info', icon?: string) {
-    if (!state.syncLogs) state.syncLogs = [];
-    state.syncLogs.push({ time: Date.now(), msg, type, icon });
-    // Mantém um histórico maior para diagnóstico profundo (100 entradas)
-    if (state.syncLogs.length > 100) state.syncLogs.shift();
-    document.dispatchEvent(new CustomEvent('sync-logs-updated'));
-}
+// --- SERIALIZATION ENGINE ---
 
-function getPayloadSizeString(payload: any): string {
-    try {
-        const size = new TextEncoder().encode(JSON.stringify(payload)).length;
-        if (size < 1024) return `${size}B`;
-        return `${(size / 1024).toFixed(1)}KB`;
-    } catch {
-        return "N/A";
+function _jsonReplacer(key: string, value: any): any {
+    if (typeof value === 'bigint') {
+        return { __type: 'bigint', val: value.toString() };
     }
+    if (value instanceof Map) {
+        return { __type: 'map', val: Array.from(value.entries()) };
+    }
+    return value;
 }
 
-// --- WORKER INFRASTRUCTURE ---
-let syncWorker: Worker | null = null;
-const workerCallbacks = new Map<string, { resolve: (val: any) => void, reject: (err: any) => void }>();
+function _jsonReviver(key: string, value: any): any {
+    if (value && typeof value === 'object' && value.__type) {
+        if (value.__type === 'bigint') {
+            return BigInt(value.val);
+        }
+        if (value.__type === 'map') {
+            return new Map(value.val);
+        }
+    }
+    return value;
+}
 
-function getWorker(): Worker {
-    if (!syncWorker) {
-        syncWorker = new Worker('./sync-worker.js', { type: 'module' });
-        syncWorker.onmessage = (e) => {
-            const { id, status, result, error } = e.data;
-            const callback = workerCallbacks.get(id);
-            if (callback) {
-                if (status === 'success') callback.resolve(result);
-                else callback.reject(new Error(error));
-                workerCallbacks.delete(id);
+// --- VIRTUAL WORKER TASKS (Main Thread Async) ---
+
+const TASKS: Record<string, (payload: any) => Promise<any> | any> = {
+    'build-ai-prompt': (payload: any) => {
+        const { analysisType, languageName, translations } = payload;
+        return {
+            prompt: `[${languageName}] ${analysisType} Analysis.\nContext: ${JSON.stringify(payload.dailyData || {})}`,
+            systemInstruction: translations.aiSystemInstruction || "Act as a Stoic Mentor."
+        };
+    },
+    'build-quote-analysis-prompt': (payload: any) => {
+        return {
+            prompt: payload.translations.aiPromptQuote.replace('{notes}', payload.notes).replace('{theme_list}', payload.themeList),
+            systemInstruction: payload.translations.aiSystemInstructionQuote
+        };
+    },
+    'archive': async (payload: any) => {
+        const result: Record<string, Uint8Array> = {};
+        const years = Object.keys(payload);
+
+        for (const year of years) {
+            const { additions, base } = payload[year];
+            let baseObj = {};
+
+            if (base) {
+                if (typeof base === 'object' && !(base instanceof Uint8Array)) {
+                    baseObj = base; 
+                } else {
+                    try {
+                        let jsonStr = '';
+                        if (base instanceof Uint8Array) {
+                            jsonStr = await decompressFromBuffer(base);
+                        } else if (typeof base === 'string') {
+                            jsonStr = base.startsWith('GZIP:') 
+                                ? await decompressString(base.substring(5))
+                                : base;
+                        }
+                        baseObj = JSON.parse(jsonStr);
+                    } catch (e) {
+                        console.warn(`[Cloud] Archive corruption for ${year}, resetting base.`, e);
+                        baseObj = {};
+                    }
+                }
+            }
+
+            const merged = { ...baseObj, ...additions };
+
+            try {
+                const compressed = await compressToBuffer(JSON.stringify(merged));
+                result[year] = compressed;
+            } catch (e) {
+                console.error(`[Cloud] Compression failed for ${year}`, e);
+                throw e;
+            }
+        }
+        return result;
+    },
+    'prune-habit': (payload: any) => {
+        return payload.archives;
+    }
+};
+
+export function runWorkerTask<T>(type: string, payload: any): Promise<T> {
+    return new Promise((resolve, reject) => {
+        const scheduler = (window as any).scheduler;
+        const runner = async () => {
+            try {
+                const handler = TASKS[type];
+                if (!handler) throw new Error(`Unknown task: ${type}`);
+                const result = await handler(payload);
+                resolve(result);
+            } catch (e) {
+                reject(e);
             }
         };
-    }
-    return syncWorker;
-}
 
-export function runWorkerTask<T>(type: 'encrypt' | 'decrypt' | 'build-ai-prompt' | 'build-quote-analysis-prompt' | 'prune-habit' | 'archive', payload: any, key?: string): Promise<T> {
-    return new Promise((resolve, reject) => {
-        const id = generateUUID();
-        workerCallbacks.set(id, { resolve, reject });
-        getWorker().postMessage({ id, type, payload, key });
+        if (scheduler?.postTask) {
+            scheduler.postTask(runner, { priority: 'background' });
+        } else {
+            setTimeout(runner, 0);
+        }
     });
 }
 
-interface ServerPayload {
-    lastModified: number;
-    state: string;
-}
+export function prewarmWorker() {}
 
-export function setSyncStatus(statusKey: 'syncSaving' | 'syncSynced' | 'syncError' | 'syncInitial') {
-    state.syncState = statusKey;
-    if (ui.syncStatus) {
-        ui.syncStatus.textContent = t(statusKey);
-    }
-}
+// --- SYNC STATUS UI ---
 
-async function resolveConflictWithServerState(serverPayload: ServerPayload) {
-    addSyncLog("Conflito detectado. Iniciando Smart Merge...", "info", "🧩");
-    const syncKey = getSyncKey();
-    if (!syncKey) return setSyncStatus('syncError');
+export function setSyncStatus(statusKey: 'syncSaving' | 'syncSynced' | 'syncError' | 'syncInitial' | 'syncing') {
+    state.syncState = statusKey === 'syncing' ? 'syncSaving' : statusKey;
+    const displayKey = statusKey === 'syncing' ? 'syncSaving' : statusKey;
     
-    try {
-        addSyncLog("Baixando estado remoto para fusão...", "info", "⬇️");
-        const serverState = await runWorkerTask<AppState>('decrypt', serverPayload.state, syncKey);
-        const localState = getPersistableState();
-        
-        // mergeStates agora cuida dos próprios logs de detalhe
-        const mergedState = await mergeStates(localState, serverState);
-        
-        addSyncLog("Estado local atualizado com sucesso.", "success", "💾");
-        await persistStateLocally(mergedState, true); 
-        await loadState(mergedState);
-        
-        renderApp();
-        setSyncStatus('syncSynced');
-        addSyncLog("Sincronização na nuvem com sucesso.", "success", "✅");
-        syncStateWithCloud(mergedState, true);
-    } catch (error: any) {
-        addSyncLog(`Falha na resolução de conflito: ${error.message}`, "error", "❌");
-        setSyncStatus('syncError');
+    if (ui.syncStatus) {
+        ui.syncStatus.textContent = t(displayKey);
+        // Visual cue that it's clickable
+        ui.syncStatus.style.cursor = 'pointer';
+        ui.syncStatus.style.textDecoration = 'underline dotted';
+    }
+    
+    if (statusKey === 'syncError' && ui.syncErrorMsg) {
+        ui.syncErrorMsg.textContent = state.syncLastError || t('syncError');
+        ui.syncErrorMsg.classList.remove('hidden');
+    } else if (ui.syncErrorMsg) {
+        ui.syncErrorMsg.classList.add('hidden');
     }
 }
 
-async function performSync() {
-    if (isSyncInProgress || !pendingSyncState) return;
+// --- DIAGNOSTICS ---
 
-    isSyncInProgress = true;
-    const appState = pendingSyncState;
-    pendingSyncState = null;
-
-    const syncKey = getSyncKey();
-    if (!syncKey) {
-        isSyncInProgress = false;
-        return setSyncStatus('syncError');
-    }
+export async function diagnoseConnection(): Promise<string> {
+    const report: string[] = [];
+    report.push(`--- DIAGNÓSTICO DE REDE ---`);
+    report.push(`Data: ${new Date().toISOString()}`);
+    report.push(`Online (Nav): ${navigator.onLine}`);
+    
+    const key = getSyncKey();
+    report.push(`Chave Local: ${key ? (key.substring(0,4) + '...') : 'NENHUMA'}`);
+    
+    if (!key) return report.join('\n');
 
     try {
-        addSyncLog("Preparando dados para envio...", "info", "📦");
-        const rawSize = getPayloadSizeString(appState);
-        addSyncLog(`Serialização completa (${rawSize}). Cifrando...`, "info", "🔒");
+        const start = performance.now();
+        // Tenta um fetch simples
+        const res = await apiFetch('/api/sync', { method: 'GET' }, true);
+        const time = (performance.now() - start).toFixed(0);
         
-        const encryptedState = await runWorkerTask<string>('encrypt', appState, syncKey);
-        const encryptedSize = `(${(encryptedState.length / 1024).toFixed(1)}KB)`;
-        addSyncLog(`Criptografia finalizada. Payload: ${encryptedSize}`, "info", "🔐");
+        report.push(`Ping API: ${time}ms`);
+        report.push(`HTTP Status: ${res.status} ${res.statusText}`);
         
-        const payload: ServerPayload = { lastModified: appState.lastModified, state: encryptedState };
+        const text = await res.text();
+        report.push(`Response Body (Sample): ${text.substring(0, 100)}`);
         
-        addSyncLog("Iniciando upload para a nuvem...", "info", "⬆️");
-        const response = await apiFetch('/api/sync', { method: 'POST', body: JSON.stringify(payload) }, true);
-
-        if (response.status === 409) {
-            const serverPayload: ServerPayload = await response.json();
-            await resolveConflictWithServerState(serverPayload);
-        } else if (response.ok) {
-            setSyncStatus('syncSynced');
-            addSyncLog("Sincronização na nuvem com sucesso.", "success", "✅");
-            document.dispatchEvent(new CustomEvent('habitsChanged'));
+        if (!res.ok) {
+            report.push(`❌ ERRO: O servidor rejeitou a conexão.`);
         } else {
-            throw new Error(`HTTP ${response.status}`);
+            report.push(`✅ SUCESSO: Conexão estabelecida.`);
         }
-    } catch (error: any) {
-        addSyncLog(`Erro de rede: ${error.message}`, "error", "❌");
+    } catch (e: any) {
+        report.push(`❌ ERRO DE REDE:`);
+        report.push(`${e.message}`);
+        if (e.cause) report.push(`Causa: ${e.cause}`);
+    }
+    
+    return report.join('\n');
+}
+
+// --- CLOUD SYNC CORE ---
+
+export async function downloadRemoteState(key: string): Promise<AppState | null> {
+    try {
+        const res = await apiFetch('/api/sync', { method: 'GET' }, true);
+        
+        if (res.status === 404) return null;
+        if (res.status === 401) throw new Error("Chave Inválida (401)");
+        if (!res.ok) throw new Error(`Erro HTTP ${res.status}`);
+
+        const data = await res.json();
+        if (!data || !data.state) return null;
+
+        const jsonString = await decrypt(data.state, key);
+        return JSON.parse(jsonString, _jsonReviver);
+
+    } catch (e: any) {
+        console.error("Download/Decrypt Failed:", e);
+        state.syncLastError = `Download: ${e.message}`;
+        throw e;
+    }
+}
+
+export async function fetchStateFromCloud(): Promise<AppState | null> {
+    if (!hasLocalSyncKey()) return null;
+    const key = getSyncKey();
+    if (!key) return null;
+
+    if (!navigator.onLine) return null;
+
+    try {
+        setSyncStatus('syncing');
+        
+        const remoteState = await downloadRemoteState(key);
+        
+        if (!remoteState) {
+            setSyncStatus('syncSynced');
+            return null;
+        }
+
+        const localState = getPersistableState();
+        if (!localState.monthlyLogs && state.monthlyLogs) {
+            localState.monthlyLogs = state.monthlyLogs;
+        }
+
+        const mergedState = await mergeStates(localState, remoteState);
+
+        Object.assign(state, mergedState);
+        await persistStateLocally(mergedState, true);
+        
+        document.dispatchEvent(new CustomEvent('render-app'));
+        setSyncStatus('syncSynced');
+        
+        return mergedState;
+
+    } catch (e: any) {
+        console.error("Cloud Pull Failed:", e);
+        state.syncLastError = e.message;
+        setSyncStatus('syncError');
+        return null;
+    }
+}
+
+async function _performSync() {
+    const key = getSyncKey();
+    if (!key) return;
+
+    if (!navigator.onLine) return;
+
+    try {
+        isSyncInProgress = true;
+        setSyncStatus('syncing');
+
+        const rawState = getPersistableState();
+        rawState.monthlyLogs = state.monthlyLogs;
+
+        const jsonString = JSON.stringify(rawState, _jsonReplacer);
+        const encryptedData = await encrypt(jsonString, key);
+
+        const payload = {
+            lastModified: rawState.lastModified, 
+            state: encryptedData
+        };
+
+        const res = await apiFetch('/api/sync', {
+            method: 'POST',
+            body: JSON.stringify(payload)
+        }, true);
+
+        if (res.status === 409) {
+            console.warn("[Cloud] Conflict (409). Server has newer data. Initiating Auto-Merge...");
+            await fetchStateFromCloud(); 
+            syncStateWithCloud();
+
+        } else if (res.status === 413) {
+            console.error("[Cloud] Payload Too Large (413).");
+            throw new Error("Dados muito grandes (Limite 1MB).");
+        } else if (res.status === 401) {
+            console.error("[Cloud] Unauthorized (401).");
+            throw new Error("Não autorizado (401).");
+        } else if (!res.ok) {
+            throw new Error(`Erro Servidor: ${res.status}`);
+        } else {
+            setSyncStatus('syncSynced');
+            state.syncLastError = null;
+        }
+
+    } catch (e: any) {
+        console.error("Sync Push Failed:", e);
+        state.syncLastError = e.message || "Erro de Conexão";
         setSyncStatus('syncError');
     } finally {
         isSyncInProgress = false;
-        if (pendingSyncState) performSync();
     }
 }
 
-export function syncStateWithCloud(appState: AppState, immediate = false) {
+export function syncStateWithCloud(currentState?: AppState, immediate = false) {
     if (!hasLocalSyncKey()) return;
-    pendingSyncState = appState;
-    setSyncStatus('syncSaving');
+    
     if (syncTimeout) clearTimeout(syncTimeout);
-    if (isSyncInProgress) return;
-    if (immediate) performSync();
-    else syncTimeout = window.setTimeout(performSync, DEBOUNCE_DELAY);
-}
-
-export async function fetchStateFromCloud(): Promise<AppState | undefined> {
-    if (!hasLocalSyncKey()) return undefined;
-    const syncKey = getSyncKey();
-    if (!syncKey) return undefined;
-
-    try {
-        addSyncLog("Verificando atualizações na nuvem...", "info", "🔍");
-        const response = await apiFetch('/api/sync', {}, true);
-        
-        if (response.status === 401) {
-            addSyncLog("Chave de sincronização inválida ou expirada.", "error", "⚠️");
-            setSyncStatus('syncError');
-            return undefined;
-        }
-
-        const data: ServerPayload | null = await response.json();
-
-        if (data && data.state) {
-            const sizeInfo = `(${(data.state.length / 1024).toFixed(1)}KB)`;
-            addSyncLog(`Dados recebidos ${sizeInfo}. Iniciando descarga...`, "info", "⬇️");
-            const appState = await runWorkerTask<AppState>('decrypt', data.state, syncKey);
-            setSyncStatus('syncSynced');
-            addSyncLog("Dados descriptografados e processados com sucesso.", "success", "✅");
-            return appState;
-        } else if (state.habits.length > 0) {
-            addSyncLog("Nuvem vazia. Iniciando upload inicial...", "info", "☁️");
-            syncStateWithCloud(getPersistableState(), true);
-        }
-        return undefined;
-    } catch (error: any) {
-        addSyncLog(`Falha no download: ${error.message}`, "error", "❌");
-        setSyncStatus('syncError');
-        throw error;
+    
+    if (immediate) {
+        console.log("[Cloud] Immediate sync trigger.");
+        _performSync();
+    } else {
+        syncTimeout = setTimeout(() => _performSync(), DEBOUNCE_DELAY);
     }
 }

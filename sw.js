@@ -1,4 +1,3 @@
-
 /**
  * @license
  * SPDX-License-Identifier: Apache-2.0
@@ -15,13 +14,14 @@ try {
     // Non-blocking failure for optional SDK
 }
 
-const CACHE_NAME = 'habit-tracker-v20-final';
+// CONSTANTS (Version Bump to Force Update)
+const CACHE_NAME = 'habit-tracker-v19-sync-final';
 
+// PERF: Static Asset List (Pre-allocated)
 const CACHE_FILES = [
     '/',
     '/index.html',
     '/bundle.js',
-    '/sync-worker.js',
     '/bundle.css',
     '/manifest.json',
     '/locales/pt.json',
@@ -33,13 +33,16 @@ const CACHE_FILES = [
     '/icons/badge.svg'
 ];
 
+// PERF: Hoisted Option Objects (Zero GC per request)
 const RELOAD_OPTS = { cache: 'reload' };
 const HTML_FALLBACK = '/index.html';
 const MATCH_OPTS = { ignoreSearch: true };
-const NETWORK_TIMEOUT_MS = 3000;
+const NETWORK_TIMEOUT_MS = 3000; // 3 Seconds max wait for Navigation
 
+// HELPER: Timeout Promise
 const timeout = (ms) => new Promise((_, reject) => setTimeout(() => reject(new Error('Network Timeout')), ms));
 
+// HELPER: Update App Shell Cache (DRY)
 const updateShellCache = (res) => {
     if (res && res.ok) {
         const copy = res.clone();
@@ -48,8 +51,12 @@ const updateShellCache = (res) => {
     return res;
 };
 
+// --- INSTALL PHASE ---
+
 self.addEventListener('install', (event) => {
+    // FORCE UPDATE: Assume control immediately
     self.skipWaiting();
+    
     event.waitUntil(
         caches.open(CACHE_NAME).then(cache => {
             return Promise.all(CACHE_FILES.map(url => 
@@ -62,7 +69,10 @@ self.addEventListener('install', (event) => {
     );
 });
 
+// --- ACTIVATE PHASE ---
+
 self.addEventListener('activate', (event) => {
+    // FORCE UPDATE: Claim clients immediately to serve new files
     event.waitUntil(
         Promise.all([
             self.clients.claim(),
@@ -74,18 +84,23 @@ self.addEventListener('activate', (event) => {
     );
 });
 
+// --- FETCH PHASE (HOT PATH) ---
+
 self.addEventListener('fetch', (event) => {
     const req = event.request;
     const url = new URL(req.url); 
 
+    // 1. Strict API Bypass
     if (url.pathname.startsWith('/api/')) return;
 
+    // 2. Navigation Strategy (App Shell)
     if (req.mode === 'navigate') {
         event.respondWith(
             (async () => {
                 try {
                     const preloadResp = await event.preloadResponse;
                     if (preloadResp) return updateShellCache(preloadResp);
+
                     const networkResp = await Promise.race([
                         fetch(req),
                         timeout(NETWORK_TIMEOUT_MS)
@@ -99,20 +114,31 @@ self.addEventListener('fetch', (event) => {
         return;
     }
 
+    // 3. Asset Strategy (Stale-while-Revalidate)
     event.respondWith(
         caches.match(req).then(cached => {
             if (cached) return cached;
+
             return fetch(req).then(networkResponse => {
                 if (!networkResponse || networkResponse.status !== 200 || networkResponse.type !== 'basic') {
                     return networkResponse;
                 }
+
+                const contentType = networkResponse.headers.get('content-type');
+                const isAsset = req.destination && ['script', 'style', 'image'].includes(req.destination);
+                
+                if (isAsset && contentType && contentType.includes('text/html')) {
+                    return networkResponse;
+                }
+
                 const responseToCache = networkResponse.clone();
                 caches.open(CACHE_NAME).then(cache => {
                     cache.put(req, responseToCache).catch(() => {});
                 });
+
                 return networkResponse;
-            }).catch(() => {
-                return new Response(null, { status: 408 });
+            }).catch(err => {
+                return new Response(null, { status: 408, statusText: "Network Failure" });
             });
         })
     );

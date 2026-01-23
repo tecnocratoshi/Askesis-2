@@ -21,12 +21,12 @@ import './css/forms.css';
 import './css/modals.css';
 
 import { state, AppState } from './state';
-import { loadState, persistStateLocally, registerSyncHandler, saveState } from './services/persistence';
+import { loadState, persistStateLocally, registerSyncHandler } from './services/persistence';
 import { renderApp, initI18n, updateUIText } from './render';
 import { setupEventListeners } from './listeners';
 import { createDefaultHabit, handleDayTransition, performArchivalCheck } from './services/habitActions';
 import { initSync } from './listeners/sync';
-import { fetchStateFromCloud, syncStateWithCloud, setSyncStatus, addSyncLog } from './services/cloud';
+import { fetchStateFromCloud, syncStateWithCloud, setSyncStatus } from './services/cloud';
 import { hasLocalSyncKey, initAuth } from './services/api';
 import { updateAppBadge } from './services/badge';
 import { mergeStates } from './services/dataMerge';
@@ -69,13 +69,16 @@ const registerServiceWorker = () => {
 
 async function loadInitialState() {
     // 1. CARREGAMENTO IMEDIATO (Local-First)
-    addSyncLog("Iniciando aplicação...", "info", "⚡");
+    // O usuário vê os dados locais instantaneamente.
     await loadState();
-    addSyncLog("Estado local carregado e hidratado.", "success", "💾");
 
     // 2. SINCRONIZAÇÃO SILENCIOSA (Background)
+    // Se houver chave, tentamos buscar novidades da nuvem sem bloquear a UI.
     if (hasLocalSyncKey()) {
-        addSyncLog("Chave de sincronização detectada. Buscando atualizações...", "info", "📡");
+        console.log("[Boot] Sync Key detectada. Iniciando Sync Silencioso...");
+        
+        // Não usamos await aqui para não travar o boot visual se a rede estiver lenta.
+        // O fetchStateFromCloud() irá atualizar o state e disparar 'render-app' se houver mudanças.
         fetchStateFromCloud().catch(e => {
             console.warn("Silent sync failed (offline?):", e);
             setSyncStatus('syncError');
@@ -84,19 +87,12 @@ async function loadInitialState() {
 }
 
 function handleFirstTimeUser() {
-    // LÓGICA DE PERSISTÊNCIA DE ZERO STATE:
-    // Se o usuário nunca inicializou o app (flag false), criamos o default.
-    // Se ele já inicializou e a lista está vazia, respeitamos a intenção dele.
-    if (!state.hasOnboarded) {
-        if (state.habits.length === 0) {
-            // Se tem chave mas deu erro, não cria default (pode estar baixando ainda)
-            if (hasLocalSyncKey() && state.syncState === 'syncError') {
-                return;
-            }
-            createDefaultHabit();
+    if (state.habits.length === 0) {
+        // Se tem chave mas deu erro, não cria default (pode estar baixando ainda)
+        if (hasLocalSyncKey() && state.syncState === 'syncError') {
+            return;
         }
-        state.hasOnboarded = true;
-        saveState();
+        createDefaultHabit();
     }
 }
 

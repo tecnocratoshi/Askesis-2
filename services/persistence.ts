@@ -12,7 +12,6 @@
 import { state, AppState, Habit, HabitDailyInfo, APP_VERSION, getPersistableState } from '../state';
 import { migrateState } from './migration';
 import { HabitService } from './HabitService';
-import { addSyncLog } from './cloud';
 
 const DB_NAME = 'AskesisDB', DB_VERSION = 1, STORE_NAME = 'app_state';
 const LEGACY_STORAGE_KEY = 'habitTrackerState_v1';
@@ -42,6 +41,21 @@ function getDB(): Promise<IDBDatabase> {
         });
     }
     return dbPromise;
+}
+
+async function performIDB<T>(mode: IDBTransactionMode, op: (s: IDBObjectStore) => IDBRequest<T>, retries = 2): Promise<T | undefined> {
+    try {
+        const db = await getDB();
+        return new Promise((resolve, reject) => {
+            const tx = db.transaction(STORE_NAME, mode), request = op(tx.objectStore(STORE_NAME));
+            request.onsuccess = () => resolve(request.result);
+            request.onerror = () => reject(request.error);
+        });
+    } catch (e) {
+        dbPromise = null; 
+        if (retries > 0) return performIDB(mode, op, retries - 1);
+        return undefined;
+    }
 }
 
 async function saveSplitState(main: AppState, logs: any): Promise<void> {
@@ -84,14 +98,15 @@ async function saveStateInternal(immediate = false, suppressSync = false) {
     const structuredData = getPersistableState();
     try {
         await saveSplitState(structuredData, state.monthlyLogs);
-        if (immediate) addSyncLog("Estado local atualizado com sucesso.", "success", "💾");
-    } catch (e: any) { 
-        addSyncLog(`Erro ao salvar no banco local: ${e.message}`, "error", "❌");
+    } catch (e) { 
+        console.error("IDB Save Failed:", e); 
     }
     
     // LOOP PROTECTION: Only trigger sync if NOT suppressed
     if (!suppressSync) {
         syncHandler?.(structuredData, immediate);
+    } else {
+        console.log("[Persistence] Sync suppressed for this save.");
     }
 }
 
@@ -207,7 +222,14 @@ export async function loadState(cloudState?: AppState): Promise<AppState | null>
 }
 
 export const clearLocalPersistence = async () => {
+    // SECURITY: Cancela qualquer salvamento pendente (debounce) para evitar que ele reescreva dados
+    // logo após o comando de delete.
     cancelPendingSave();
+    
+    // TRANSACTIONAL INTEGRITY:
+    // Em vez de usar performIDB (que resolve no onsuccess), criamos uma transação manual
+    // que só resolve no 'oncomplete'. Isso garante que o commit no disco ocorreu
+    // antes de prosseguirmos para o reload da página.
     try {
         const db = await getDB();
         await new Promise<void>((resolve, reject) => {
@@ -230,6 +252,7 @@ export const clearLocalPersistence = async () => {
 };
 
 if (typeof window !== 'undefined') {
+    // TRIGGER: Flush sync queue on close/hide
     window.addEventListener('beforeunload', () => { flushSaveBuffer(); });
     document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') flushSaveBuffer(); });
 }

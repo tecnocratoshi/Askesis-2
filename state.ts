@@ -1,4 +1,3 @@
-
 /**
  * @license
  * SPDX-License-Identifier: Apache-2.0
@@ -138,16 +137,15 @@ export interface DaySummary {
     readonly showPlusIndicator: boolean;
 }
 
-export interface SyncLog {
-    time: number;
-    msg: string;
-    type: 'success' | 'error' | 'info';
-    icon?: string; 
-}
-
 // --- BITMASK STRUCTURES ---
 export const PERIOD_OFFSET = { Morning: 0, Afternoon: 2, Evening: 4 } as const;
 export const HABIT_STATE = { NULL: 0, DONE: 1, DEFERRED: 2, DONE_PLUS: 3 } as const;
+
+export interface MonthlyHabitLog {
+    habitId: string;
+    monthKey: string; 
+    data: bigint;     
+}
 
 export interface AppState {
     readonly version: number;
@@ -160,8 +158,6 @@ export interface AppState {
     readonly pending21DayHabitIds: readonly string[];
     readonly pendingConsolidationHabitIds: readonly string[];
     readonly quoteState?: QuoteDisplayState;
-    readonly hasOnboarded: boolean; 
-    readonly syncLogs?: SyncLog[];
     monthlyLogs?: Map<string, bigint>;
 }
 
@@ -171,6 +167,7 @@ export const STREAK_SEMI_CONSOLIDATED = 21;
 export const STREAK_CONSOLIDATED = 66;
 export const STREAK_LOOKBACK_DAYS = 730;
 
+const MAX_UNARCHIVED_CACHE_SIZE = 3; 
 const MAX_SELECTOR_CACHE_SIZE = 365; 
 
 export const TIMES_OF_DAY = ['Morning', 'Afternoon', 'Evening'] as const;
@@ -218,8 +215,6 @@ export const state: {
     pending21DayHabitIds: string[];
     pendingConsolidationHabitIds: string[];
     notificationsShown: string[];
-    hasOnboarded: boolean; 
-    syncLogs: SyncLog[];
     confirmAction: (() => void) | null;
     confirmEditAction: (() => void) | null;
     editingNoteFor: { habitId: string; date: string; time: TimeOfDay; } | null;
@@ -266,8 +261,6 @@ export const state: {
     pending21DayHabitIds: [],
     pendingConsolidationHabitIds: [],
     notificationsShown: [],
-    hasOnboarded: false,
-    syncLogs: [],
     confirmAction: null,
     confirmEditAction: null,
     editingNoteFor: null,
@@ -304,6 +297,9 @@ export function invalidateChartCache() {
 }
 
 export function getPersistableState(): AppState {
+    // MONOTONIC CLOCK LOGIC: Ensure lastModified always moves forward.
+    // If the system clock is behind the last known state (due to clock skew or device switch),
+    // we increment manually to guarantee the server accepts the update as newer.
     const now = Date.now();
     if (now > state.lastModified) {
         state.lastModified = now;
@@ -322,8 +318,6 @@ export function getPersistableState(): AppState {
         pending21DayHabitIds: state.pending21DayHabitIds,
         pendingConsolidationHabitIds: state.pendingConsolidationHabitIds,
         quoteState: state.quoteState,
-        hasOnboarded: state.hasOnboarded,
-        syncLogs: state.syncLogs.slice(-50), 
     };
 }
 
@@ -360,6 +354,17 @@ export function invalidateCachesForDateChange(dateISO: string, habitIds: string[
 
 const EMPTY_DAILY_INFO = Object.freeze({});
 
+function _enforceCacheLimit(exemptKey?: string) {
+    if (state.unarchivedCache.size > MAX_UNARCHIVED_CACHE_SIZE) {
+        for (const k of state.unarchivedCache.keys()) {
+            if (k !== exemptKey && !k.endsWith('_pending')) {
+                state.unarchivedCache.delete(k);
+                return;
+            }
+        }
+    }
+}
+
 export function isDateLoading(date: string): boolean {
     return state.unarchivedCache.has(`${date.substring(0, 4)}_pending`);
 }
@@ -386,6 +391,7 @@ export function getHabitDailyInfoForDate(date: string): Record<string, HabitDail
                 decompressFromBuffer(rawArchive).then(json => {
                     try {
                         const parsedYearData = JSON.parse(json);
+                        _enforceCacheLimit(pendingKey);
                         state.unarchivedCache.set(year, parsedYearData);
                         state.unarchivedCache.delete(pendingKey);
                         document.dispatchEvent(new CustomEvent('render-app'));
@@ -400,23 +406,70 @@ export function getHabitDailyInfoForDate(date: string): Record<string, HabitDail
             }
             return (EMPTY_DAILY_INFO as Record<string, HabitDailyInfo>);
         }
+        
+        else if (typeof rawArchive === 'string') {
+            if (rawArchive.startsWith('GZIP:')) {
+                const pendingKey = `${year}_pending`;
+                if (!state.unarchivedCache.has(pendingKey)) {
+                    state.unarchivedCache.set(pendingKey, {});
+                    decompressString(rawArchive.substring(5)).then(json => {
+                        try {
+                            const parsedYearData = JSON.parse(json);
+                            _enforceCacheLimit(pendingKey);
+                            state.unarchivedCache.set(year, parsedYearData);
+                            state.unarchivedCache.delete(pendingKey);
+                            document.dispatchEvent(new CustomEvent('render-app'));
+                        } catch {
+                            state.unarchivedCache.set(year, {}); 
+                            state.unarchivedCache.delete(pendingKey);
+                        }
+                    }).catch(() => {
+                        state.unarchivedCache.set(year, {}); 
+                        state.unarchivedCache.delete(pendingKey);
+                    });
+                }
+                return (EMPTY_DAILY_INFO as Record<string, HabitDailyInfo>);
+            } else {
+                try {
+                    const parsedYearData = JSON.parse(rawArchive);
+                    _enforceCacheLimit(year);
+                    state.unarchivedCache.set(year, parsedYearData);
+                    return parsedYearData[date] || (EMPTY_DAILY_INFO as Record<string, HabitDailyInfo>);
+                } catch {
+                    console.error(`Error parsing legacy archive for ${year}`);
+                }
+            }
+        }
     }
     return (EMPTY_DAILY_INFO as Record<string, HabitDailyInfo>);
 }
 
 export function ensureHabitDailyInfo(date: string, habitId: string): HabitDailyInfo {
-    if (isDateLoading(date)) throw new DataLoadingError(`Data for ${date} is hydrating.`);
+    if (isDateLoading(date)) {
+        throw new DataLoadingError(`Data for ${date} is hydrating.`);
+    }
+
     if (!Object.prototype.hasOwnProperty.call(state.dailyData, date)) {
         const archivedDay = getHabitDailyInfoForDate(date);
-        state.dailyData[date] = (archivedDay !== EMPTY_DAILY_INFO) ? structuredClone(archivedDay) : {};
+        if (archivedDay !== EMPTY_DAILY_INFO) {
+            state.dailyData[date] = structuredClone(archivedDay);
+        } else {
+            if (isDateLoading(date)) throw new DataLoadingError(`Hydration triggered.`);
+            state.dailyData[date] = {};
+        }
     }
+
     const dayData = state.dailyData[date];
-    if (!dayData[habitId]) dayData[habitId] = _createMonomorphicDailyInfo();
+    if (!dayData[habitId]) {
+        dayData[habitId] = _createMonomorphicDailyInfo();
+    }
     return dayData[habitId];
 }
 
 export function ensureHabitInstanceData(date: string, habitId: string, time: TimeOfDay): HabitDayData {
     const habitInfo = ensureHabitDailyInfo(date, habitId);
-    if (!habitInfo.instances[time]) habitInfo.instances[time] = _createMonomorphicInstance();
+    if (!habitInfo.instances[time]) {
+        habitInfo.instances[time] = _createMonomorphicInstance();
+    }
     return habitInfo.instances[time]!;
 }
