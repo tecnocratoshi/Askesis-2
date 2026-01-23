@@ -62,7 +62,6 @@ async function saveSplitState(main: AppState, logs: any): Promise<void> {
     });
 }
 
-// Handler signature updated to support 'immediate' flag for flush operations
 let syncHandler: ((state: AppState, immediate?: boolean) => void) | null = null;
 export const registerSyncHandler = (h: (s: AppState, immediate?: boolean) => void) => syncHandler = h;
 
@@ -79,10 +78,8 @@ function pruneOrphanedDailyData(habits: readonly Habit[], dailyData: Record<stri
     }
 }
 
-// Internal save with suppression support
 async function saveStateInternal(immediate = false, suppressSync = false) {
-    // REPAIR [2025-06-05]: Garante que lastModified seja estritamente crescente.
-    // Isso evita que o servidor receba timestamps idênticos e retorne 304.
+    // Garante que lastModified seja sempre crescente e único
     state.lastModified = Math.max(Date.now(), state.lastModified + 1);
 
     const structuredData = getPersistableState();
@@ -92,7 +89,6 @@ async function saveStateInternal(immediate = false, suppressSync = false) {
         console.error("IDB Save Failed:", e); 
     }
     
-    // LOOP PROTECTION: Only trigger sync if NOT suppressed
     if (!suppressSync) {
         syncHandler?.(structuredData, immediate);
     }
@@ -109,7 +105,6 @@ export async function flushSaveBuffer(): Promise<void> {
     if (saveTimeout !== undefined) {
         clearTimeout(saveTimeout);
         saveTimeout = undefined;
-        // Trigger immediate save and immediate sync
         await saveStateInternal(true);
     }
 }
@@ -145,7 +140,7 @@ export async function loadState(cloudState?: AppState): Promise<AppState | null>
                 tx.onerror = () => resolve();
             });
         } catch (e) {
-            console.warn("[Persistence] Failed to read split state from IDB", e);
+            console.warn("[Persistence] Failed to read state from IDB", e);
         }
     }
 
@@ -199,12 +194,9 @@ export async function loadState(cloudState?: AppState): Promise<AppState | null>
             }
         }
 
-        // LIMPEZA ABSOLUTA DE CACHES (Fundamental para reatividade)
         ['streaksCache', 'scheduleCache', 'activeHabitsCache', 'unarchivedCache', 'habitAppearanceCache', 'daySummaryCache'].forEach(k => (state as any)[k].clear());
         
-        // REPAIR: Também limpa o cache do DOM para garantir reconstrução total
         clearHabitDomCache();
-
         Object.assign(state.uiDirtyState, { calendarVisuals: true, habitListStructure: true, chartData: true });
         
         document.dispatchEvent(new CustomEvent('render-app'));
@@ -229,9 +221,8 @@ export const clearLocalPersistence = async () => {
             tx.onerror = () => reject(tx.error);
         });
     } catch (e) {
-        console.warn("IDB clear failed or empty", e);
+        console.warn("IDB clear failed", e);
     }
-
     localStorage.removeItem(LEGACY_STORAGE_KEY);
     state.monthlyLogs = new Map();
 };

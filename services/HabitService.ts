@@ -29,7 +29,6 @@ export class HabitService {
 
     /**
      * [CRÍTICO] Escrita Otimizada (Bitmask Only)
-     * Esta função grava o clique na memória.
      */
     static setStatus(habitId: string, dateISO: string, time: TimeOfDay, newState: number) {
         if (!state.monthlyLogs) state.monthlyLogs = new Map();
@@ -53,7 +52,9 @@ export class HabitService {
     static serializeLogsForCloud(): [string, string][] {
         if (!state.monthlyLogs) return [];
         return Array.from(state.monthlyLogs.entries()).map(([key, val]) => {
-            return [key, "0x" + val.toString(16)] as [string, string];
+            // Garante o prefixo 0x para que o Worker reviver reconheça como BigInt
+            const hex = val.toString(16);
+            return [key, "0x" + hex] as [string, string];
         });
     }
 
@@ -93,7 +94,6 @@ export class HabitService {
 
     /**
      * INTELLIGENT MERGE (CRDT-Lite para Bitmasks)
-     * Funde dois mapas de logs usando bitwise OR para acumular estados de conclusão.
      */
     static mergeLogs(winnerMap: Map<string, bigint> | undefined, loserMap: Map<string, bigint> | undefined): Map<string, bigint> {
         const result = new Map<string, bigint>(winnerMap || []);

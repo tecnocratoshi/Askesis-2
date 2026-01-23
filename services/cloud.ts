@@ -31,7 +31,6 @@ const workerCallbacks = new Map<string, { resolve: (val: any) => void, reject: (
 
 function getWorker(): Worker {
     if (!syncWorker) {
-        // REPAIR: Caminho relativo explícito e tratamento de erro de carga
         syncWorker = new Worker('./sync-worker.js', { type: 'module' });
         
         syncWorker.onmessage = (e) => {
@@ -49,12 +48,11 @@ function getWorker(): Worker {
         
         syncWorker.onerror = (e) => {
             console.error("CRITICAL: Sync Worker Error", e);
-            // Se o worker morrer, rejeitamos todas as promessas pendentes para destravar a UI
             workerCallbacks.forEach((cb, id) => {
-                cb.reject(new Error("Worker failed to initialize"));
+                cb.reject(new Error("Worker thread crashed"));
                 workerCallbacks.delete(id);
             });
-            syncWorker = null; // Permite tentativa de recriação na próxima tarefa
+            syncWorker = null; 
         };
     }
     return syncWorker;
@@ -82,13 +80,12 @@ export function addSyncLog(msg: string, type: 'success' | 'error' | 'info', icon
 export function runWorkerTask<T>(type: 'encrypt' | 'decrypt' | 'build-ai-prompt' | 'build-quote-analysis-prompt' | 'prune-habit' | 'archive', payload: any, key?: string): Promise<T> {
     return new Promise((resolve, reject) => {
         const id = generateUUID();
-        const timeoutMs = 15000; // 15 segundos para operações pesadas de criptografia
+        const timeoutMs = 15000; 
         
         const timeoutId = setTimeout(() => {
             if (workerCallbacks.has(id)) {
-                console.warn(`Worker task ${type} timed out after ${timeoutMs}ms`);
                 workerCallbacks.delete(id);
-                reject(new Error("Timeout de processamento (Worker)"));
+                reject(new Error("Worker Timeout"));
             }
         }, timeoutMs);
 
@@ -119,23 +116,9 @@ export function setSyncStatus(statusKey: 'syncSaving' | 'syncSynced' | 'syncErro
     }
 }
 
-export function setupNotificationListeners() {
-    pushToOneSignal((OneSignal: any) => {
-        OneSignal.Notifications.addEventListener('permissionChange', () => {
-            setTimeout(updateNotificationUI, 500);
-        });
-        updateNotificationUI();
-    });
-}
-
 async function resolveConflictWithServerState(serverPayload: ServerPayload) {
-    console.warn("Sync conflict detected. Initiating Smart Merge sequence.");
-    
     const syncKey = getSyncKey();
-    if (!syncKey) {
-        setSyncStatus('syncError');
-        return;
-    }
+    if (!syncKey) return;
     
     try {
         const serverState = await runWorkerTask<AppState>('decrypt', serverPayload.state, syncKey);
@@ -145,14 +128,11 @@ async function resolveConflictWithServerState(serverPayload: ServerPayload) {
         await persistStateLocally(mergedState, true); 
         await loadState(mergedState);
         
-        state.uiDirtyState.habitListStructure = true;
-        state.uiDirtyState.calendarVisuals = true;
-        state.uiDirtyState.chartData = true;
-
         renderApp();
         setSyncStatus('syncSynced'); 
         document.dispatchEvent(new CustomEvent('habitsChanged'));
 
+        // Re-sincroniza o estado fundido para garantir que o servidor tenha a versão final
         syncStateWithCloud(mergedState, true);
         
     } catch (error) {
@@ -188,8 +168,6 @@ async function performSync() {
             body: JSON.stringify(payload),
         }, true);
 
-        // REPAIR [2025-06-05]: 304 e 200 são sucessos. 
-        // response.ok falha para status 304, por isso a verificação explícita.
         if (response.status === 200 || response.status === 304) {
             setSyncStatus('syncSynced');
             document.dispatchEvent(new CustomEvent('habitsChanged')); 
@@ -197,16 +175,16 @@ async function performSync() {
             const serverPayload: ServerPayload = await response.json();
             await resolveConflictWithServerState(serverPayload);
         } else {
-            throw new Error(`Server returned status: ${response.status}`);
+            throw new Error(`Sync Error: ${response.status}`);
         }
     } catch (error) {
         console.error("Sync failure:", error);
         setSyncStatus('syncError');
     } finally {
         isSyncInProgress = false;
+        // Se houve mudanças enquanto esta sincronização estava rodando, agenda a próxima
         if (pendingSyncState) {
-            if (syncTimeout) clearTimeout(syncTimeout);
-            performSync();
+            setTimeout(performSync, 100);
         }
     }
 }
@@ -215,10 +193,13 @@ export function syncStateWithCloud(appState: AppState, immediate = false) {
     if (!hasLocalSyncKey()) return;
 
     pendingSyncState = appState; 
-    setSyncStatus('syncSaving');
+    
+    // Só atualiza para "Salvando" se não estivermos no meio de um processo
+    if (state.syncState !== 'syncSaving') {
+        setSyncStatus('syncSaving');
+    }
 
     if (syncTimeout) clearTimeout(syncTimeout);
-    
     if (isSyncInProgress) return;
 
     if (immediate) {
@@ -236,11 +217,7 @@ export async function fetchStateFromCloud(): Promise<AppState | undefined> {
 
     try {
         const response = await apiFetch('/api/sync', {}, true);
-        
-        if (!response.ok) {
-            if (response.status === 401) throw new Error("Não autorizado: Chave inválida");
-            throw new Error(`Erro na nuvem: ${response.status}`);
-        }
+        if (!response.ok) throw new Error(`Fetch failed: ${response.status}`);
 
         const data: ServerPayload | null = await response.json();
 
