@@ -32,7 +32,8 @@ import {
     clearHabitDomCache, renderStoicQuote
 } from './render';
 import { ui } from './render/ui';
-import { t, getTimeOfDayName, formatDate } from './i18n'; 
+// --- FIX: Added formatList to imports ---
+import { t, getTimeOfDayName, formatDate, formatList } from './i18n'; 
 import { runWorkerTask } from './services/cloud';
 import { apiFetch, clearKey } from './services/api';
 import { HabitService } from './services/HabitService';
@@ -406,14 +407,21 @@ export function setGoalOverride(habitId: string, d: string, t: TimeOfDay, v: num
 export function requestHabitTimeRemoval(habitId: string, time: TimeOfDay) { const h = _lockActionHabit(habitId), target = getSafeDate(state.selectedDate); if (!h) return; ActionContext.removal = { habitId, time, targetDate: target }; showConfirmationModal(t('confirmRemoveTimePermanent', { habitName: getHabitDisplayInfo(h, target).name, time: getTimeOfDayName(time) }), () => { ensureHabitDailyInfo(target, habitId).dailySchedule = undefined; _requestFutureScheduleChange(habitId, target, s => ({ ...s, times: s.times.filter(x => x !== time) as readonly TimeOfDay[] })); ActionContext.reset(); }, { title: t('modalRemoveTimeTitle'), confirmText: t('deleteButton'), confirmButtonStyle: 'danger' }); }
 export function exportData() { const blob = new Blob([JSON.stringify(getPersistableState(), null, 2)], { type: 'application/json' }), url = URL.createObjectURL(blob), a = document.createElement('a'); a.href = url; a.download = `askesis-backup-${getTodayUTCIso()}.json`; a.click(); URL.revokeObjectURL(url); }
 export function handleDayTransition() { const today = getTodayUTCIso(); clearActiveHabitsCache(); state.uiDirtyState.calendarVisuals = state.uiDirtyState.habitListStructure = state.uiDirtyState.chartData = true; state.calendarDates = []; if (state.selectedDate !== today) state.selectedDate = today; document.dispatchEvent(new CustomEvent('render-app')); }
+
 function _processAndFormatCelebrations(pendingIds: string[], translationKey: 'aiCelebration21Day' | 'aiCelebration66Day', streakMilestone: number): string {
     if (pendingIds.length === 0) return '';
     const habitNamesList = pendingIds.map(id => state.habits.find(h => h.id === id)).filter(Boolean).map(h => getHabitDisplayInfo(h!).name);
     const habitNames = formatList(habitNamesList);
     // --- FIX: Fix typo notifications_shown -> notificationsShown ---
-    pendingIds.forEach(id => { const celebrationId = `${id}-${streakMilestone}`; if (!state.notificationsShown.includes(celebrationId)) state.notificationsShown.push(celebrationId); });
+    pendingIds.forEach(id => { 
+        const celebrationId = `${id}-${streakMilestone}`; 
+        if (!state.notificationsShown.includes(celebrationId)) {
+            state.notificationsShown.push(celebrationId);
+        }
+    });
     return t(translationKey, { count: pendingIds.length, habitNames });
-};
+}
+
 export function consumeAndFormatCelebrations(): string {
     const celebration21DayText = _processAndFormatCelebrations(state.pending21DayHabitIds, 'aiCelebration21Day', STREAK_SEMI_CONSOLIDATED);
     const celebration66DayText = _processAndFormatCelebrations(state.pendingConsolidationHabitIds, 'aiCelebration66Day', STREAK_CONSOLIDATED);

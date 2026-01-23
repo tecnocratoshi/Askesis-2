@@ -17,7 +17,14 @@ async function deriveKey(password: string, salt: Uint8Array): Promise<CryptoKey>
     );
 }
 
-async function encrypt(text: string, password: string): Promise<string> {
+async function encrypt(payload: any, password: string): Promise<string> {
+    // PERFORMANCE FIX: Serialização ocorre no Worker agora.
+    // O replacer lida com BigInt preservando o formato esperado pelo Askesis.
+    const text = JSON.stringify(payload, (key, value) => {
+        if (typeof value === 'bigint') return { __type: 'bigint', val: value.toString() };
+        return value;
+    });
+
     const salt = crypto.getRandomValues(new Uint8Array(SALT_LEN));
     const iv = crypto.getRandomValues(new Uint8Array(IV_LEN));
     const key = await deriveKey(password, salt);
@@ -38,6 +45,10 @@ async function decrypt(encryptedBase64: string, password: string): Promise<any> 
     const data = bytes.slice(SALT_LEN + IV_LEN);
     const key = await deriveKey(password, salt);
     const decrypted = await crypto.subtle.decrypt({ name: "AES-GCM", iv }, key, data);
+    
+    // O parsing também ocorre no Worker. 
+    // Nota: O reviver de BigInt não é estritamente necessário aqui se o caller
+    // na Main Thread usar o HabitService.deserializeLogsFromCloud que já lida com Map/BigInt.
     return JSON.parse(new TextDecoder().decode(decrypted));
 }
 
@@ -62,8 +73,7 @@ self.onmessage = async (e) => {
 };
 
 function buildAiPrompt(data: any) {
-    const { habits, dailyData, analysisType, translations, languageName } = data;
-    const logs = new Map<string, string>(data.monthlyLogsSerialized || []);
+    const { habits, dailyData, translations, languageName } = data;
     let details = "";
     habits.forEach((h: any) => {
         if (h.graduatedOn) return;
@@ -85,7 +95,6 @@ function buildQuoteAnalysisPrompt(data: any) {
 
 async function archiveDailyData(payload: any) {
     const result: Record<string, any> = {};
-    // Em um Worker real, usaríamos CompressionStream se disponível
     for (const year in payload) {
         result[year] = { ...payload[year].base, ...payload[year].additions };
     }

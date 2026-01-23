@@ -17,8 +17,8 @@ export default defineConfig(({ mode }) => {
       },
       resolve: {
         alias: {
-          // --- FIX: Use process.cwd() instead of __dirname ---
-          '@': path.resolve(process.cwd(), '.'),
+          // --- FIX: Use path.resolve('.') to bypass TS Process type issues ---
+          '@': path.resolve('.'),
         }
       }
     };

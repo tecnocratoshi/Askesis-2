@@ -58,9 +58,11 @@ async function _processKey(key: string) {
     
     try {
         storeKey(key);
+        // --- FIX: _refreshViewState does not accept arguments ---
         _refreshViewState(); 
         
-        const cloudState = await downloadRemoteState(key);
+        // --- FIX: downloadRemoteState (alias for fetchStateFromCloud) does not accept arguments ---
+        const cloudState = await downloadRemoteState();
 
         if (cloudState) {
             const localState = getPersistableState();
@@ -70,6 +72,12 @@ async function _processKey(key: string) {
 
             const mergedState = await mergeStates(localState, cloudState);
             Object.assign(state, mergedState);
+            
+            // CACHE INVALIDATION [2025-06-05]: Force DOM to redraw new habits and calendar rings
+            state.uiDirtyState.habitListStructure = true;
+            state.uiDirtyState.calendarVisuals = true;
+            state.uiDirtyState.chartData = true;
+
             await saveState();
             renderApp();
             setSyncStatus('syncSynced');

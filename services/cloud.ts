@@ -37,12 +37,6 @@ export function addSyncLog(msg: string, type: 'success' | 'error' | 'info' = 'in
     document.dispatchEvent(new CustomEvent('sync-logs-updated'));
 }
 
-function _jsonReplacer(key: string, value: any): any {
-    if (typeof value === 'bigint') return { __type: 'bigint', val: value.toString() };
-    if (value instanceof Map) return { __type: 'map', val: Array.from(value.entries()) };
-    return value;
-}
-
 // --- WORKER INFRASTRUCTURE ---
 let syncWorker: Worker | null = null;
 const workerCallbacks = new Map<string, { resolve: (val: any) => void, reject: (err: any) => void }>();
@@ -87,6 +81,7 @@ async function resolveConflictWithServerState(serverPayload: ServerPayload) {
     if (!syncKey) return setSyncStatus('syncError');
     
     try {
+        // Descriptografia ocorre no Worker (recebe string, devolve objeto via JSON.parse interno do worker)
         const serverState = await runWorkerTask<AppState>('decrypt', serverPayload.state, syncKey);
         const localState = getPersistableState();
         const mergedState = await mergeStates(localState, serverState);
@@ -114,11 +109,19 @@ async function performSync() {
     if (!syncKey) { isSyncInProgress = false; return setSyncStatus('syncError'); }
 
     try {
-        addSyncLog("Preparando payload criptografado...", "info", "🔒");
-        const logsSerialized = HabitService.serializeLogsForCloud();
-        const fullPersistable = { ...appState, monthlyLogsSerialized: logsSerialized };
+        addSyncLog("Preparando payload (POJO Bridge)...", "info", "🔒");
         
-        const encryptedState = await runWorkerTask<string>('encrypt', JSON.stringify(fullPersistable, _jsonReplacer), syncKey);
+        // PERFORMANCE FIX: Em vez de JSON.stringify na Main Thread (bloqueante),
+        // criamos um objeto compatível com Structured Clone.
+        // BigInt é suportado nativamente, mas Map precisa virar Array.
+        const cloneableState = { 
+            ...appState, 
+            monthlyLogs: Array.from(state.monthlyLogs.entries()) 
+        };
+
+        // O Worker agora recebe o objeto bruto e faz a serialização lá (Non-blocking).
+        const encryptedState = await runWorkerTask<string>('encrypt', cloneableState, syncKey);
+        
         const payload: ServerPayload = { lastModified: appState.lastModified, state: encryptedState };
         
         addSyncLog(`Upload iniciado (${(encryptedState.length / 1024).toFixed(1)}KB)...`, "info", "⬆️");

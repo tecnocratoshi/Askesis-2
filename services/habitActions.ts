@@ -431,13 +431,21 @@ export function exportData() {
     const a = document.createElement('a'); a.href = url; a.download = `askesis-backup-${getTodayUTCIso()}.json`; a.click(); URL.revokeObjectURL(url);
 }
 export function handleDayTransition() { const today = getTodayUTCIso(); clearActiveHabitsCache(); state.uiDirtyState.calendarVisuals = state.uiDirtyState.habitListStructure = state.uiDirtyState.chartData = true; state.calendarDates = []; if (state.selectedDate !== today) state.selectedDate = today; document.dispatchEvent(new CustomEvent('render-app')); }
+
 function _processAndFormatCelebrations(pendingIds: string[], translationKey: 'aiCelebration21Day' | 'aiCelebration66Day', streakMilestone: number): string {
     if (pendingIds.length === 0) return '';
     const habitNamesList = pendingIds.map(id => state.habits.find(h => h.id === id)).filter(Boolean).map(h => getHabitDisplayInfo(h!).name);
     const habitNames = formatList(habitNamesList);
-    pendingIds.forEach(id => { const celebrationId = `${id}-${streakMilestone}`; if (!state.notifications_shown) (state as any).notifications_shown = []; if (!state.notificationsShown.includes(celebrationId)) state.notificationsShown.push(celebrationId); });
+    // --- FIX: Fix typo notifications_shown -> notificationsShown and simplify logic ---
+    pendingIds.forEach(id => { 
+        const celebrationId = `${id}-${streakMilestone}`; 
+        if (!state.notificationsShown.includes(celebrationId)) {
+            state.notificationsShown.push(celebrationId);
+        }
+    });
     return t(translationKey, { count: pendingIds.length, habitNames });
-};
+}
+
 export function consumeAndFormatCelebrations(): string {
     const celebration21DayText = _processAndFormatCelebrations(state.pending21DayHabitIds, 'aiCelebration21Day', STREAK_SEMI_CONSOLIDATED);
     const celebration66DayText = _processAndFormatCelebrations(state.pendingConsolidationHabitIds, 'aiCelebration66Day', STREAK_CONSOLIDATED);

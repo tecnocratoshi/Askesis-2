@@ -103,18 +103,18 @@ export class HabitService {
     /**
      * INTELLIGENT MERGE (CRDT-Lite para Bitmasks)
      * Funde dois mapas de logs.
-     * Regra Padrão: Timestamp Authority (definido no caller) + Soft Merge (não apaga dados se um lado for zero).
+     * REFIX [2025-06-05]: Usando operação bitwise OR para que marcações em dispositivos diferentes 
+     * se somem deterministicamente em vez de um dispositivo sobrescrever o outro.
      */
     static mergeLogs(winnerMap: Map<string, bigint> | undefined, loserMap: Map<string, bigint> | undefined): Map<string, bigint> {
         const result = new Map<string, bigint>(winnerMap || []);
         if (!loserMap) return result;
 
         for (const [key, loserVal] of loserMap.entries()) {
-            const winnerVal = result.get(key);
-            // Se o vencedor não tem dados ou tem dados vazios (0), aceita os dados do perdedor
-            if (winnerVal === undefined || (winnerVal === 0n && loserVal !== 0n)) {
-                result.set(key, loserVal);
-            }
+            const winnerVal = result.get(key) || 0n;
+            // O OR bitwise funde os estados de conclusão de todos os períodos do mês.
+            // Ex: Se o perdedor tem registro na Manhã e o vencedor na Noite, o resultado tem ambos.
+            result.set(key, winnerVal | loserVal);
         }
         return result;
     }
