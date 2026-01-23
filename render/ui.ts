@@ -1,3 +1,4 @@
+
 /**
  * @license
  * SPDX-License-Identifier: Apache-2.0
@@ -58,6 +59,7 @@ export interface UIElements {
     editHabitModal: HTMLElement;
     editHabitModalTitle: HTMLElement;
     editHabitForm: HTMLFormElement;
+    habitSubtitleDisplay: HTMLElement;
     editHabitSaveBtn: HTMLButtonElement;
     habitTimeContainer: HTMLElement;
     frequencyOptionsContainer: HTMLElement;
@@ -110,6 +112,7 @@ export interface UIElements {
     syncActiveDesc: HTMLElement;
     iconPickerTitle: HTMLElement;
     colorPickerTitle: HTMLElement;
+    syncErrorMsg: HTMLElement;
     
     // Dynamic Injected Elements
     habitConscienceDisplay: HTMLElement;
@@ -156,7 +159,7 @@ function queryElement(selector: string): Element {
     // ROBUSTNESS [2025-06-03]: Silent fail for dynamic elements that might be injected later.
     // O elemento habit-conscience-display é injetado via JS, então pode não existir no first boot.
     // Retornamos undefined/null implicitamente se não achar, para ser tratado no render.
-    if (!element && selector !== '#habit-conscience-display') {
+    if (!element && selector !== '#habit-conscience-display' && selector !== '#habit-subtitle-display') {
         throw new Error(`UI element "${selector}" not found.`);
     }
     return element as Element;
@@ -231,6 +234,7 @@ defineLazy(ui, 'languageNextBtn', '#language-next', uiCache);
 defineLazy(ui, 'editHabitModal', '#edit-habit-modal', uiCache);
 defineLazy(ui, 'editHabitModalTitle', '#edit-habit-modal-title', uiCache);
 defineLazy(ui, 'editHabitForm', '#edit-habit-form', uiCache);
+defineLazy(ui, 'habitSubtitleDisplay', '#habit-subtitle-display', uiCache);
 defineLazy(ui, 'editHabitSaveBtn', '#edit-habit-save-btn', uiCache);
 defineLazy(ui, 'habitTimeContainer', '#habit-time-container', uiCache);
 defineLazy(ui, 'frequencyOptionsContainer', '#frequency-options-container', uiCache);
@@ -284,6 +288,7 @@ defineLazy(ui, 'syncActiveDesc', '#sync-active-desc', uiCache);
 defineLazy(ui, 'iconPickerTitle', '#icon-picker-modal-title', uiCache);
 defineLazy(ui, 'colorPickerTitle', '#color-picker-modal-title', uiCache);
 defineLazy(ui, 'habitConscienceDisplay', '#habit-conscience-display', uiCache);
+defineLazy(ui, 'syncErrorMsg', '#sync-error-msg', uiCache);
 
 // --- CHART ELEMENTS SUB-OBJECT ---
 ui.chart = {} as UIElements['chart'];
@@ -300,7 +305,7 @@ defineLazy(ui.chart, 'tooltipDate', '#chart-container .tooltip-date', chartCache
 defineLazy(ui.chart, 'tooltipScoreLabel', '#chart-container .tooltip-score-label', chartCache);
 defineLazy(ui.chart, 'tooltipScoreValue', '#chart-container .tooltip-score-value', chartCache);
 defineLazy(ui.chart, 'tooltipHabits', '#chart-container .tooltip-habits li', chartCache);
-defineLazy(ui.chart, 'indicator', '#chart-container .chart-indicator', chartCache);
+defineLazy(ui, 'indicator', '#chart-container .chart-indicator', chartCache);
 defineLazy(ui.chart, 'evolutionIndicator', '#chart-container .chart-evolution-indicator', chartCache);
 defineLazy(ui.chart, 'axisStart', '#chart-container .chart-axis-labels span:first-child', chartCache);
 defineLazy(ui.chart, 'axisEnd', '#chart-container .chart-axis-labels span:last-child', chartCache);

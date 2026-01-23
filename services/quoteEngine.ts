@@ -19,10 +19,12 @@
  * - Historical Determinism: O passado é imutável.
  */
 
-import { state, Habit, StoicVirtue, GovernanceSphere } from '../state';
+// AUDIT FIX: Removed unused 'getHabitDailyInfoForDate'
+import { state, Habit, StoicVirtue, GovernanceSphere, HABIT_STATE } from '../state';
 import { Quote, StoicTag } from '../data/quotes';
-import { calculateDaySummary, getEffectiveScheduleForHabitOnDate, calculateHabitStreak } from './selectors';
+import { calculateDaySummary, getEffectiveScheduleForHabitOnDate, calculateHabitStreak, getScheduleForDate } from './selectors';
 import { toUTCIsoDateString, parseUTCIsoDate, getTodayUTCIso } from '../utils';
+import { HabitService } from './HabitService';
 
 // --- TUNING CONSTANTS ---
 const WEIGHTS = {
@@ -107,10 +109,11 @@ function _analyzeRecentHistory(todayISO: string): number {
 function _getDominantVirtues(habits: Habit[], dateISO: string): Set<StoicVirtue> {
     const counts: Record<string, number> = {};
     
+    // @fix: Get philosophy from the habit's schedule for the given date.
     habits.forEach(h => {
-        const schedule = getEffectiveScheduleForHabitOnDate(h, dateISO);
-        if (schedule.length > 0 && h.philosophy) {
-            const v = h.philosophy.virtue;
+        const habitSchedule = getScheduleForDate(h, dateISO);
+        if (habitSchedule?.times.length > 0 && habitSchedule.philosophy) {
+            const v = habitSchedule.philosophy.virtue;
             counts[v] = (counts[v] || 0) + 1;
         }
     });
@@ -129,18 +132,24 @@ function _getDominantVirtues(habits: Habit[], dateISO: string): Set<StoicVirtue>
 
 function _getNeglectedSphere(habits: Habit[], dateISO: string): GovernanceSphere | null {
     const sphereStats: Record<string, { total: number, done: number }> = {};
-    const dailyData = state.dailyData[dateISO] || {};
-
+    
+    // @fix: Get philosophy from the habit's schedule for the given date.
     habits.forEach(h => {
-        const schedule = getEffectiveScheduleForHabitOnDate(h, dateISO);
-        if (schedule.length > 0 && h.philosophy) {
-            const sph = h.philosophy.sphere;
+        const habitSchedule = getScheduleForDate(h, dateISO);
+        
+        if (habitSchedule?.philosophy) {
+            const sph = habitSchedule.philosophy.sphere;
             if (!sphereStats[sph]) sphereStats[sph] = { total: 0, done: 0 };
             
-            schedule.forEach(time => {
+            // AUDIT FIX: Use effective schedule to account for day overrides/moves.
+            // Previously iterated habitSchedule.times, which missed dynamic changes.
+            const effectiveTimes = getEffectiveScheduleForHabitOnDate(h, dateISO);
+            
+            effectiveTimes.forEach(time => {
                 sphereStats[sph].total++;
-                const status = dailyData[h.id]?.instances[time]?.status;
-                if (status === 'completed') sphereStats[sph].done++;
+                // FIX: Use HabitService for status check with habit object passed
+                const status = HabitService.getStatus(h.id, dateISO, time);
+                if (status === HABIT_STATE.DONE || status === HABIT_STATE.DONE_PLUS) sphereStats[sph].done++;
             });
         }
     });
@@ -319,14 +328,15 @@ function _scoreQuote(quote: Quote, context: ContextVector): number {
     }
 
     // 6. PERFORMANCE REACTION
-    const state = context.performanceState;
-    if (state === 'defeat') {
+    // AUDIT FIX: Renamed shadowed variable 'state' to 'perfState'
+    const perfState = context.performanceState;
+    if (perfState === 'defeat') {
         applyTagRule(true, ['resilience', 'acceptance', 'fate'], WEIGHTS.PERFORMANCE);
-    } else if (state === 'triumph') {
+    } else if (perfState === 'triumph') {
         applyTagRule(true, ['humility', 'temperance', 'death'], WEIGHTS.PERFORMANCE);
-    } else if (state === 'struggle') {
+    } else if (perfState === 'struggle') {
         applyTagRule(true, ['discipline', 'action', 'focus'], WEIGHTS.PERFORMANCE);
-    } else if (state === 'urgency') {
+    } else if (perfState === 'urgency') {
         if (quote.metadata.tags.includes('urgency') || quote.metadata.tags.includes('time') || 
             quote.metadata.tags.includes('action') || quote.metadata.tags.includes('death')) {
             score += WEIGHTS.PERFORMANCE * 1.2;

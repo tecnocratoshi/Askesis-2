@@ -57,7 +57,7 @@ export function setupReelRotary({
     let cachedItemWidth = 95; // Valor inicial seguro
     
     // SNIPER OPTIMIZATION: Feature Detection for Typed OM
-    const hasTypedOM = !!(reelEl.attributeStyleMap && window.CSSTranslate && window.CSS && CSS.px);
+    const hasTypedOM = typeof window !== 'undefined' && !!(reelEl.attributeStyleMap && (window as any).CSSTranslate && window.CSS && CSS.px);
 
     // Helper para atualizar a posição visual logicamente e no DOM
     const updatePosition = (index: number, animate: boolean) => {
@@ -71,12 +71,11 @@ export function setupReelRotary({
             reelEl.style.transition = '';
         }
         
-        // GPU Composition
-        if (hasTypedOM) {
-            // Fast Path: Direct Compositor Communication
-            reelEl.attributeStyleMap!.set('transform', new CSSTranslate(CSS.px(targetX), CSS.px(0)));
+        // BLEEDING-EDGE PERF (CSS Typed OM):
+        // Comunicação direta com o compositor da GPU para animações de "snap".
+        if (hasTypedOM && reelEl.attributeStyleMap) {
+            reelEl.attributeStyleMap.set('transform', new (window as any).CSSTranslate(CSS.px(targetX), CSS.px(0)));
         } else {
-            // Legacy Path: String Parsing
             reelEl.style.transform = `translateX(${targetX}px)`;
         }
     };
@@ -110,15 +109,20 @@ export function setupReelRotary({
     let isSwiping = false;
     let startTransformX = 0;
     
+    // RESIZE OBSERVER LOOP FIX: Debounce logic via RAF
+    let resizeRaf = 0;
     const resizeObserver = new ResizeObserver(entries => {
-        for (const entry of entries) {
-            const firstChild = entry.target.firstElementChild;
-            if (firstChild) {
-                cachedItemWidth = firstChild.clientWidth;
-                // Re-alinha ao redimensionar
-                updatePosition(currentIndex, false);
+        if (resizeRaf) cancelAnimationFrame(resizeRaf);
+        resizeRaf = requestAnimationFrame(() => {
+            for (const entry of entries) {
+                const firstChild = entry.target.firstElementChild;
+                if (firstChild) {
+                    cachedItemWidth = firstChild.clientWidth;
+                    // Re-alinha ao redimensionar
+                    updatePosition(currentIndex, false);
+                }
             }
-        }
+        });
     });
     
     resizeObserver.observe(reelEl);
@@ -149,9 +153,11 @@ export function setupReelRotary({
         // Update State Tracker
         currentVisualX = clampedTranslateX;
         
-        // GPU Write (Sniper Optimized)
-        if (hasTypedOM) {
-            reelEl.attributeStyleMap!.set('transform', new CSSTranslate(CSS.px(clampedTranslateX), CSS.px(0)));
+        // BLEEDING-EDGE PERF (CSS Typed OM):
+        // No "hot path" do gesto, evitamos criar e parsear strings de `transform`,
+        // escrevendo os valores numéricos diretamente no motor de composição para fluidez máxima.
+        if (hasTypedOM && reelEl.attributeStyleMap) {
+            reelEl.attributeStyleMap.set('transform', new (window as any).CSSTranslate(CSS.px(clampedTranslateX), CSS.px(0)));
         } else {
             reelEl.style.transform = `translateX(${clampedTranslateX}px)`;
         }

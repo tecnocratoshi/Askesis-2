@@ -1,4 +1,3 @@
-
 /**
  * @license
  * SPDX-License-Identifier: Apache-2.0
@@ -24,7 +23,7 @@ import { state, AppState } from './state';
 import { loadState, persistStateLocally, registerSyncHandler } from './services/persistence';
 import { renderApp, initI18n, updateUIText } from './render';
 import { setupEventListeners } from './listeners';
-import { createDefaultHabit, handleDayTransition, performArchivalCheck } from './habitActions';
+import { createDefaultHabit, handleDayTransition, performArchivalCheck } from './services/habitActions';
 import { initSync } from './listeners/sync';
 import { fetchStateFromCloud, syncStateWithCloud, setSyncStatus } from './services/cloud';
 import { hasLocalSyncKey, initAuth } from './services/api';
@@ -32,11 +31,33 @@ import { updateAppBadge } from './services/badge';
 import { mergeStates } from './services/dataMerge';
 import { setupMidnightLoop } from './utils';
 
-// --- STATE MACHINE: BOOT LOCK ---
+// --- AUTO-HEALING & INTEGRITY CHECK ---
+const BOOT_ATTEMPTS_KEY = 'askesis_boot_attempts';
+const MAX_BOOT_ATTEMPTS = 3;
+
+function checkIntegrityAndHeal() {
+    const attempts = parseInt(sessionStorage.getItem(BOOT_ATTEMPTS_KEY) || '0', 10);
+    if (attempts >= MAX_BOOT_ATTEMPTS) {
+        console.warn("🚨 Detected boot loop. Initiating Auto-Healing...");
+        if ('serviceWorker' in navigator) {
+            navigator.serviceWorker.getRegistrations().then(registrations => {
+                for (const registration of registrations) { registration.unregister(); }
+            });
+        }
+        if ('caches' in window) {
+            caches.keys().then(names => { for (const name of names) { caches.delete(name); } });
+        }
+        sessionStorage.removeItem(BOOT_ATTEMPTS_KEY);
+        setTimeout(() => window.location.reload(), 500);
+        return false;
+    }
+    sessionStorage.setItem(BOOT_ATTEMPTS_KEY, (attempts + 1).toString());
+    return true;
+}
+
 let isInitializing = false;
 let isInitialized = false;
 
-// --- SERVICE WORKER REGISTRATION ---
 const registerServiceWorker = () => {
     if ('serviceWorker' in navigator && !window.location.protocol.startsWith('file')) {
         const loadSW = () => navigator.serviceWorker.register('/sw.js').catch(console.warn);
@@ -48,52 +69,28 @@ const registerServiceWorker = () => {
 const NETWORK_TIMEOUT = Symbol('NETWORK_TIMEOUT');
 
 async function loadInitialState() {
-    const localState = await loadState(); 
-    
+    // 1. Carrega Estado Local (Rápido) para First Paint
+    await loadState();
+
+    // 2. Se houver chave, tenta buscar e mesclar da Nuvem
     if (hasLocalSyncKey()) {
         try {
+            console.log("[Boot] Sync Key detectada. Iniciando Pull da nuvem...");
             const CLOUD_BOOT_TIMEOUT_MS = 3000;
-            const raceResult = await Promise.race([
+            
+            // fetchStateFromCloud agora já faz o merge e o save internamente.
+            // Nós apenas esperamos ele terminar ou o timeout estourar.
+            await Promise.race([
                 fetchStateFromCloud(),
                 new Promise<typeof NETWORK_TIMEOUT>(resolve => setTimeout(() => resolve(NETWORK_TIMEOUT), CLOUD_BOOT_TIMEOUT_MS))
             ]);
-
-            if (raceResult === NETWORK_TIMEOUT) {
-                console.warn("Startup: Network timed out.");
-                setSyncStatus('syncError');
-                if (!localState) return; 
-            } 
             
-            const cloudState = raceResult === NETWORK_TIMEOUT ? undefined : raceResult;
-            const isCloudEmpty = raceResult === undefined;
-
-            if (cloudState && localState) {
-                const localIsNewer = localState.lastModified > cloudState.lastModified;
-                const stateToLoad = await mergeStates(
-                    localIsNewer ? cloudState : localState, 
-                    localIsNewer ? localState : cloudState
-                );
-                
-                if (localIsNewer) syncStateWithCloud(stateToLoad, true);
-                await persistStateLocally(stateToLoad);
-                await loadState(stateToLoad);
-                
-            } else if (cloudState) {
-                await persistStateLocally(cloudState);
-                await loadState(cloudState);
-                
-            } else if (localState) {
-                if (isCloudEmpty) syncStateWithCloud(localState as AppState, true);
-                await loadState(localState);
-            }
+            // O estado global 'state' já foi atualizado pelo fetchStateFromCloud se teve sucesso.
             
         } catch (e) {
-            console.error("Startup: Cloud sync failed, using local.", e);
+            console.error("Startup: Cloud sync failed, continuing with local state.", e);
             setSyncStatus('syncError');
-            if (localState) await loadState(localState);
         }
-    } else if (localState) {
-        await loadState(localState);
     }
 }
 
@@ -107,40 +104,32 @@ function handleFirstTimeUser() {
     }
 }
 
-/**
- * Orquestra Listeners. 
- * CRÍTICO: syncHandler registrado após o carregamento de dados para evitar Race Condition de boot.
- */
 function setupAppListeners() {
     setupEventListeners();
     initSync();
     document.addEventListener('habitsChanged', updateAppBadge);
     setupMidnightLoop();
     document.addEventListener('dayChanged', handleDayTransition);
-    // Ativa o canal de saída de dados apenas após estabilização do estado
     registerSyncHandler(syncStateWithCloud);
 }
 
 function finalizeInit(loader: HTMLElement | null) {
+    sessionStorage.removeItem(BOOT_ATTEMPTS_KEY);
     if (loader) {
         loader.classList.add('hidden');
-        // RELIABILITY: Garante remoção mesmo se a transição CSS falhar/for desativada (Reduced Motion)
         const cleanup = () => {
             loader.remove();
             document.getElementById('initial-loader-container')?.remove();
         };
-        const timer = setTimeout(cleanup, 400); // Buffer para a transição de 0.3s
+        const timer = setTimeout(cleanup, 400); 
         loader.addEventListener('transitionend', () => { clearTimeout(timer); cleanup(); }, { once: true });
     }
-    
     const runBackgroundTasks = () => {
         performArchivalCheck();
         if (process.env.NODE_ENV === 'production') {
             import('./services/analytics').then(({ initAnalytics }) => initAnalytics()).catch(() => {});
         }
     };
-
-    // @fix: Cast to any to handle scheduler which might be missing in some global Window types
     if ((window as any).scheduler?.postTask) {
         (window as any).scheduler.postTask(runBackgroundTasks, { priority: 'background' });
     } else {
@@ -149,26 +138,22 @@ function finalizeInit(loader: HTMLElement | null) {
 }
 
 async function init(loader: HTMLElement | null) {
-    // SINGLETON GUARD
     if (isInitializing || isInitialized) return;
     isInitializing = true;
 
-    // @fix: Cast to any to access bootWatchdog property
     if ((window as any).bootWatchdog) {
         clearTimeout((window as any).bootWatchdog);
         delete (window as any).bootWatchdog;
     }
 
-    initAuth();
+    // AUTH FIX: Await key restoration (LocalStorage + IndexedDB) BEFORE loading state
+    await initAuth();
+    
     await Promise.all([initI18n(), updateUIText()]);
 
-    // 1. Data Loading (Local -> Cloud -> Merge)
     await loadInitialState();
 
-    // 2. Setup Listeners POST-DATA
     setupAppListeners();
-
-    // 3. Logic & Render
     handleFirstTimeUser();
     renderApp(); 
     
@@ -179,18 +164,14 @@ async function init(loader: HTMLElement | null) {
     isInitializing = false;
 }
 
-registerServiceWorker();
-
 const startApp = () => {
-    // PREVENT DOUBLE BOOT
+    if (!checkIntegrityAndHeal()) return;
+    registerServiceWorker();
     if (isInitializing || isInitialized) return;
-    
     const loader = document.getElementById('initial-loader');
     init(loader).catch(err => {
         console.error("Boot failed:", err);
         isInitializing = false;
-        // UX: Fallback visual robusto
-        // @fix: Cast to any to check and call showFatalError
         if ((window as any).showFatalError) {
             (window as any).showFatalError("Erro na inicialização: " + (err.message || err));
         } else if(loader && loader.isConnected) {

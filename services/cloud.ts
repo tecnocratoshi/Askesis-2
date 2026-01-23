@@ -1,139 +1,288 @@
+
 /**
  * @license
  * SPDX-License-Identifier: Apache-2.0
-*/
+ * VERSÃO: V18.6 - Robust Error Handling
+ */
 
 import { AppState, state, getPersistableState } from '../state';
-import { loadState, persistStateLocally } from './persistence';
-import { generateUUID } from '../utils';
+import { persistStateLocally } from './persistence';
 import { ui } from '../render/ui';
 import { t } from '../i18n';
 import { hasLocalSyncKey, getSyncKey, apiFetch } from './api';
+import { encrypt, decrypt } from './crypto';
+import { mergeStates } from './dataMerge';
+import { compressToBuffer, decompressFromBuffer, decompressString } from '../utils';
 
 const DEBOUNCE_DELAY = 2000;
-const WORKER_TIMEOUT_MS = 30000;
-const MAX_PAYLOAD_SIZE = 1000000;
-const MAX_RETRIES = 3;
-
 let syncTimeout: any = null;
 let isSyncInProgress = false;
-let pendingSyncState: AppState | null = null;
-let syncFailCount = 0;
-let syncWorker: Worker | null = null;
-const workerCallbacks = new Map<string, { resolve: (val: any) => void, reject: (err: any) => void, timer: any }>();
 
-function terminateWorker(reason: string) {
-    syncWorker?.terminate();
-    syncWorker = null;
-    workerCallbacks.forEach(cb => { clearTimeout(cb.timer); cb.reject(new Error(`Worker Reset: ${reason}`)); });
-    workerCallbacks.clear();
-}
+// --- SERIALIZATION ENGINE ---
 
-function getWorker(): Worker {
-    if (!syncWorker) {
-        syncWorker = new Worker('./sync-worker.js', { type: 'module' });
-        syncWorker.onmessage = (e) => {
-            const { id, status, result, error } = e.data;
-            const cb = workerCallbacks.get(id);
-            if (!cb) return;
-            clearTimeout(cb.timer);
-            status === 'success' ? cb.resolve(result) : cb.reject(new Error(error));
-            workerCallbacks.delete(id);
-        };
-        syncWorker.onerror = () => terminateWorker("Crash");
+function _jsonReplacer(key: string, value: any): any {
+    if (typeof value === 'bigint') {
+        return { __type: 'bigint', val: value.toString() };
     }
-    return syncWorker;
+    if (value instanceof Map) {
+        return { __type: 'map', val: Array.from(value.entries()) };
+    }
+    return value;
 }
 
-const _getAuthKey = () => {
-    const k = getSyncKey();
-    if (!k) setSyncStatus('syncError');
-    return k;
+function _jsonReviver(key: string, value: any): any {
+    if (value && typeof value === 'object' && value.__type) {
+        if (value.__type === 'bigint') {
+            return BigInt(value.val);
+        }
+        if (value.__type === 'map') {
+            return new Map(value.val);
+        }
+    }
+    return value;
+}
+
+// --- VIRTUAL WORKER TASKS (Main Thread Async) ---
+
+const TASKS: Record<string, (payload: any) => Promise<any> | any> = {
+    'build-ai-prompt': (payload: any) => {
+        const { analysisType, languageName, translations } = payload;
+        return {
+            prompt: `[${languageName}] ${analysisType} Analysis.\nContext: ${JSON.stringify(payload.dailyData || {})}`,
+            systemInstruction: translations.aiSystemInstruction || "Act as a Stoic Mentor."
+        };
+    },
+    'build-quote-analysis-prompt': (payload: any) => {
+        return {
+            prompt: payload.translations.aiPromptQuote.replace('{notes}', payload.notes).replace('{theme_list}', payload.themeList),
+            systemInstruction: payload.translations.aiSystemInstructionQuote
+        };
+    },
+    'archive': async (payload: any) => {
+        // Payload: Record<year, { additions: DailyData, base: string|Uint8Array|Object }>
+        const result: Record<string, Uint8Array> = {};
+        const years = Object.keys(payload);
+
+        for (const year of years) {
+            const { additions, base } = payload[year];
+            let baseObj = {};
+
+            // 1. Hydrate Base (Decompress if needed)
+            if (base) {
+                if (typeof base === 'object' && !(base instanceof Uint8Array)) {
+                    baseObj = base; // Already hydrated (from cache)
+                } else {
+                    try {
+                        let jsonStr = '';
+                        if (base instanceof Uint8Array) {
+                            jsonStr = await decompressFromBuffer(base);
+                        } else if (typeof base === 'string') {
+                            // Legacy support
+                            jsonStr = base.startsWith('GZIP:') 
+                                ? await decompressString(base.substring(5))
+                                : base;
+                        }
+                        baseObj = JSON.parse(jsonStr);
+                    } catch (e) {
+                        console.warn(`[Cloud] Archive corruption for ${year}, resetting base.`, e);
+                        baseObj = {};
+                    }
+                }
+            }
+
+            // 2. Merge Additions
+            const merged = { ...baseObj, ...additions };
+
+            // 3. Compress Result (GZIP Buffer)
+            // This ensures state.archives remains lightweight
+            try {
+                const compressed = await compressToBuffer(JSON.stringify(merged));
+                result[year] = compressed;
+            } catch (e) {
+                console.error(`[Cloud] Compression failed for ${year}`, e);
+                // In worst case, we lose the archive optimization but save data
+                // Note: The app expects Uint8Array or String in archives.
+                // We'll throw to prevent saving corrupted state.
+                throw e;
+            }
+        }
+        return result;
+    },
+    'prune-habit': (payload: any) => {
+        // Simplificado: Apenas retorna os arquivos como estão,
+        // pois a limpeza real de chaves órfãs é complexa sem descompressão total.
+        // Em V18, aceitamos manter dados órfãos em archives (cold storage) para evitar overhead de CPU.
+        return payload.archives;
+    }
 };
 
-export const prewarmWorker = () => getWorker();
-
-export function runWorkerTask<T>(type: string, payload: any, key?: string): Promise<T> {
+export function runWorkerTask<T>(type: string, payload: any): Promise<T> {
     return new Promise((resolve, reject) => {
-        const id = generateUUID();
-        const timer = setTimeout(() => { if (workerCallbacks.has(id)) terminateWorker(`Timeout:${type}`); }, WORKER_TIMEOUT_MS);
-        workerCallbacks.set(id, { resolve, reject, timer });
-        getWorker().postMessage({ id, type, payload, key });
+        // Scheduler API or SetTimeout
+        const scheduler = (window as any).scheduler;
+        const runner = async () => {
+            try {
+                const handler = TASKS[type];
+                if (!handler) throw new Error(`Unknown task: ${type}`);
+                const result = await handler(payload);
+                resolve(result);
+            } catch (e) {
+                reject(e);
+            }
+        };
+
+        if (scheduler?.postTask) {
+            scheduler.postTask(runner, { priority: 'background' });
+        } else {
+            setTimeout(runner, 0);
+        }
     });
 }
 
-export function setSyncStatus(statusKey: 'syncSaving' | 'syncSynced' | 'syncError' | 'syncInitial') {
-    state.syncState = statusKey;
-    if (ui.syncStatus) ui.syncStatus.textContent = t(statusKey);
-}
+export function prewarmWorker() {}
 
-async function resolveConflictWithServerState(serverPayload: { lastModified: number; state: string }) {
-    const key = _getAuthKey();
-    if (!key) return;
-    try {
-        const serverState = await runWorkerTask<AppState>('decrypt', serverPayload.state, key);
-        const merged = await runWorkerTask<AppState>('merge', { local: getPersistableState(), incoming: serverState });
-        if (merged.lastModified <= serverPayload.lastModified) merged.lastModified = serverPayload.lastModified + 1;
-        await persistStateLocally(merged);
-        await loadState(merged);
-        document.dispatchEvent(new CustomEvent('render-app'));
-        setSyncStatus('syncSynced');
-        document.dispatchEvent(new CustomEvent('habitsChanged'));
-        syncStateWithCloud(merged, true);
-    } catch { setSyncStatus('syncError'); }
-}
+// --- SYNC STATUS UI ---
 
-async function performSync() {
-    if (isSyncInProgress || !pendingSyncState) return;
-    const key = _getAuthKey();
-    const appState = pendingSyncState;
-    if (!key) { isSyncInProgress = false; return; }
+export function setSyncStatus(statusKey: 'syncSaving' | 'syncSynced' | 'syncError' | 'syncInitial' | 'syncing') {
+    state.syncState = statusKey === 'syncing' ? 'syncSaving' : statusKey;
+    const displayKey = statusKey === 'syncing' ? 'syncSaving' : statusKey;
     
-    isSyncInProgress = true;
-    pendingSyncState = null;
-    try {
-        const encrypted = await runWorkerTask<string>('encrypt', appState, key);
-        if (encrypted.length > MAX_PAYLOAD_SIZE) throw new Error("Size limit");
-
-        const res = await apiFetch('/api/sync', {
-            method: 'POST',
-            body: JSON.stringify({ lastModified: appState.lastModified, state: encrypted }),
-        }, true);
-
-        if (res.status === 409) await resolveConflictWithServerState(await res.json());
-        else { setSyncStatus('syncSynced'); document.dispatchEvent(new CustomEvent('habitsChanged')); }
-        syncFailCount = 0;
-    } catch {
-        setSyncStatus('syncError');
-        if (++syncFailCount < MAX_RETRIES) pendingSyncState = appState;
-    } finally {
-        isSyncInProgress = false;
-        if (pendingSyncState && syncFailCount < MAX_RETRIES) performSync();
+    if (ui.syncStatus) ui.syncStatus.textContent = t(displayKey);
+    
+    if (statusKey === 'syncError' && ui.syncErrorMsg) {
+        ui.syncErrorMsg.textContent = state.syncLastError || t('syncError');
+        ui.syncErrorMsg.classList.remove('hidden');
+    } else if (ui.syncErrorMsg) {
+        ui.syncErrorMsg.classList.add('hidden');
     }
 }
 
-export function syncStateWithCloud(appState: AppState, immediate = false) {
-    if (!hasLocalSyncKey()) return;
-    pendingSyncState = appState;
-    setSyncStatus('syncSaving');
-    clearTimeout(syncTimeout);
-    if (isSyncInProgress) return;
-    if (immediate) performSync();
-    else syncTimeout = setTimeout(performSync, DEBOUNCE_DELAY);
+// --- CLOUD SYNC CORE ---
+
+export async function downloadRemoteState(key: string): Promise<AppState | null> {
+    try {
+        const res = await apiFetch('/api/sync', { method: 'GET' }, true);
+        
+        if (res.status === 404) return null;
+        if (res.status === 401) throw new Error("Chave Inválida (401)");
+        if (!res.ok) throw new Error(`Erro HTTP ${res.status}`);
+
+        const data = await res.json();
+        if (!data || !data.state) return null;
+
+        const jsonString = await decrypt(data.state, key);
+        return JSON.parse(jsonString, _jsonReviver);
+
+    } catch (e) {
+        console.error("Download/Decrypt Failed:", e);
+        throw e;
+    }
 }
 
-export async function fetchStateFromCloud(): Promise<AppState | undefined> {
-    const key = _getAuthKey();
-    if (!key) return;
-    prewarmWorker();
+export async function fetchStateFromCloud(): Promise<AppState | null> {
+    if (!hasLocalSyncKey()) return null;
+    const key = getSyncKey();
+    if (!key) return null;
+
     try {
-        const res = await apiFetch('/api/sync', {}, true);
-        const data = await res.json();
-        if (data?.state) {
-            const appState = await runWorkerTask<AppState>('decrypt', data.state, key);
+        setSyncStatus('syncing');
+        
+        const remoteState = await downloadRemoteState(key);
+        
+        if (!remoteState) {
             setSyncStatus('syncSynced');
-            return appState;
+            return null;
         }
-        if (state.habits.length) syncStateWithCloud(getPersistableState(), true);
-    } catch (e) { setSyncStatus('syncError'); throw e; }
+
+        const localState = getPersistableState();
+        // Fix: Ensure Maps exist for merge
+        if (!localState.monthlyLogs && state.monthlyLogs) {
+            localState.monthlyLogs = state.monthlyLogs;
+        }
+
+        const mergedState = await mergeStates(localState, remoteState);
+
+        Object.assign(state, mergedState);
+        await persistStateLocally(mergedState);
+        
+        document.dispatchEvent(new CustomEvent('render-app'));
+        setSyncStatus('syncSynced');
+        
+        return mergedState;
+
+    } catch (e: any) {
+        console.error("Cloud Pull Failed:", e);
+        state.syncLastError = e.message;
+        setSyncStatus('syncError');
+        return null;
+    }
+}
+
+async function _performSync() {
+    const key = getSyncKey();
+    if (!key) return;
+
+    try {
+        isSyncInProgress = true;
+        setSyncStatus('syncing');
+
+        const rawState = getPersistableState();
+        rawState.monthlyLogs = state.monthlyLogs;
+
+        const jsonString = JSON.stringify(rawState, _jsonReplacer);
+        const encryptedData = await encrypt(jsonString, key);
+
+        const payload = {
+            lastModified: Date.now(),
+            state: encryptedData
+        };
+
+        const res = await apiFetch('/api/sync', {
+            method: 'POST',
+            body: JSON.stringify(payload)
+        }, true);
+
+        if (res.status === 409) {
+            console.warn("Conflict (409). Pulling newer version...");
+            // AUTO-MERGE STRATEGY: Pull, Merge, then (implicitly) user can save again later.
+            await fetchStateFromCloud(); 
+        } else if (res.status === 413) {
+            throw new Error("Dados muito grandes (413).");
+        } else if (res.status === 401) {
+            throw new Error("Não autorizado (401). Verifique a chave.");
+        } else if (!res.ok) {
+            throw new Error(`Erro Servidor: ${res.status}`);
+        } else {
+            setSyncStatus('syncSynced');
+            state.syncLastError = null;
+        }
+
+    } catch (e: any) {
+        console.error("Sync Push Failed:", e);
+        if (e instanceof TypeError && e.message.includes('BigInt')) {
+            state.syncLastError = "Erro de Serialização";
+        } else {
+            state.syncLastError = e.message || "Erro de Conexão";
+        }
+        setSyncStatus('syncError');
+    } finally {
+        isSyncInProgress = false;
+    }
+}
+
+export function syncStateWithCloud(currentState?: AppState, immediate = false) {
+    if (!hasLocalSyncKey()) return;
+    
+    if (syncTimeout) clearTimeout(syncTimeout);
+    
+    if (immediate) {
+        console.log("[Cloud] Immediate sync trigger.");
+        _performSync();
+    } else {
+        syncTimeout = setTimeout(() => _performSync(), DEBOUNCE_DELAY);
+    }
+}
+
+if (hasLocalSyncKey()) {
+    setTimeout(fetchStateFromCloud, 1500);
 }

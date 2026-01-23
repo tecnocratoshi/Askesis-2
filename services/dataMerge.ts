@@ -6,156 +6,116 @@
 /**
  * @file services/dataMerge.ts
  * @description Algoritmo de Reconciliação de Estado (Smart Merge / CRDT-lite).
- * 
- * [MAIN THREAD CONTEXT]:
- * Este módulo executa lógica computacional pura (síncrona). 
+ * Versão Main Thread (sincronizada logicamente com o Worker).
  */
 
-import { AppState, HabitDailyInfo, TimeOfDay } from '../state';
-import { decompressString, compressString } from '../utils';
+import { AppState, HabitDailyInfo } from '../state';
 
-// PERFORMANCE: Lookup Table para pesos de status (Smi Values).
-const STATUS_WEIGHTS: Record<string, number> = {
-    'completed': 3,
-    'snoozed': 2,
-    'pending': 1
-};
-
-// CONSTANTS
-const GZIP_PREFIX = 'GZIP:';
-
-/**
- * Helper de fusão granular dia-a-dia.
- * Itera sobre os dados locais e aplica lógica de "Winner Takes All" baseada em peso.
- */
-function mergeDayRecord(localDay: Record<string, HabitDailyInfo>, mergedDay: Record<string, HabitDailyInfo>) {
+function mergeDayRecord(localDay: Record<string, HabitDailyInfo>, mergedDay: Record<string, HabitDailyInfo>): boolean {
+    let isDirty = false;
     for (const habitId in localDay) {
         if (!mergedDay[habitId]) {
             mergedDay[habitId] = localDay[habitId];
+            isDirty = true;
             continue;
         }
 
         const localHabitData = localDay[habitId];
         const mergedHabitData = mergedDay[habitId];
 
-        if (localHabitData.dailySchedule !== undefined) {
-            mergedHabitData.dailySchedule = localHabitData.dailySchedule;
-        }
+        const localInstances = localHabitData.instances || {};
+        const mergedInstances = mergedHabitData.instances || {};
 
-        const localInstances = localHabitData.instances;
-        const mergedInstances = mergedHabitData.instances;
-
-        for (const timeKey in localInstances) {
-            const time = timeKey as TimeOfDay;
-            const localInst = localInstances[time];
-            const mergedInst = mergedInstances[time];
+        for (const time in localInstances) {
+            const localInst = localInstances[time as any];
+            const mergedInst = mergedInstances[time as any];
 
             if (!localInst) continue;
 
             if (!mergedInst) {
-                mergedInstances[time] = localInst;
+                mergedInstances[time as any] = localInst;
+                isDirty = true;
             } else {
-                // CONFLITO SEMÂNTICO: Decoupled Merge Strategy.
-                const lWeight = STATUS_WEIGHTS[localInst.status] ?? 1;
-                const mWeight = STATUS_WEIGHTS[mergedInst.status] ?? 1;
-
-                if (lWeight > mWeight) {
-                    mergedInst.status = localInst.status;
-                    if (localInst.goalOverride !== undefined) {
-                        mergedInst.goalOverride = localInst.goalOverride;
-                    }
-                } else if (mergedInst.goalOverride === undefined && localInst.goalOverride !== undefined) {
+                // WEIGHTED MERGE LOGIC (Main Thread)
+                
+                // 1. Goal Override
+                if (mergedInst.goalOverride === undefined && localInst.goalOverride !== undefined) {
                     mergedInst.goalOverride = localInst.goalOverride;
+                    isDirty = true;
                 }
-
-                // Note Merge: "Maior Texto Vence".
-                const lNoteLen = localInst.note?.length ?? 0;
-                const mNoteLen = mergedInst.note?.length ?? 0;
-
-                if (lNoteLen > mNoteLen) {
+                
+                // 2. Notes (Heavier wins)
+                const lNoteLen = localInst.note ? localInst.note.length : 0;
+                const mNoteLen = mergedInst.note ? mergedInst.note.length : 0;
+                
+                // If merged has no note but local does -> Local wins
+                // If both have notes but local is longer -> Local wins
+                if ((!mergedInst.note && localInst.note) || (localInst.note && lNoteLen > mNoteLen)) {
                     mergedInst.note = localInst.note;
+                    isDirty = true;
                 }
             }
         }
-    }
-}
-
-async function hydrateArchive(content: string): Promise<Record<string, any>> {
-    try {
-        if (content.startsWith(GZIP_PREFIX)) {
-            const json = await decompressString(content.substring(GZIP_PREFIX.length));
-            return JSON.parse(json);
+        
+        // Preserve Schedules
+        if (!mergedHabitData.dailySchedule && localHabitData.dailySchedule) {
+             mergedHabitData.dailySchedule = localHabitData.dailySchedule;
+             isDirty = true;
         }
-        return JSON.parse(content);
-    } catch (e) {
-        console.error("Merge: Hydration failed", e);
-        return {};
     }
+    return isDirty;
 }
 
-/**
- * SMART MERGE ALGORITHM:
- * Combina dois estados de forma inteligente preservando o progresso.
- */
 export async function mergeStates(local: AppState, incoming: AppState): Promise<AppState> {
-    const merged: AppState = structuredClone(incoming);
-
-    // 1. Fusão de Definições de Hábitos
-    const incomingIds = new Set();
-    for (let i = 0; i < incoming.habits.length; i++) incomingIds.add(incoming.habits[i].id);
+    // 1. Newest Wins Strategy
+    const localTs = local.lastModified || 0;
+    const incomingTs = incoming.lastModified || 0;
     
-    for (let i = 0; i < local.habits.length; i++) {
-        if (!incomingIds.has(local.habits[i].id)) {
-            merged.habits.push(local.habits[i]);
+    let winner = localTs > incomingTs ? local : incoming;
+    let loser = localTs > incomingTs ? incoming : local;
+    
+    const merged: AppState = structuredClone(winner);
+    
+    // 2. Habits: Union by ID (Don't lose offline creations)
+    const mergedIds = new Set(merged.habits.map(h => h.id));
+    loser.habits.forEach(h => {
+        if (!mergedIds.has(h.id)) {
+            (merged.habits as any).push(h);
         }
-    }
+    });
 
-    // 2. Mesclar Daily Data (Hot Storage)
-    for (const date in local.dailyData) {
+    // 3. Daily Data: Weighted Merge (Inject loser data into winner if beneficial)
+    for (const date in loser.dailyData) {
         if (!merged.dailyData[date]) {
-            merged.dailyData[date] = local.dailyData[date];
+            (merged.dailyData as any)[date] = loser.dailyData[date];
         } else {
-            mergeDayRecord(local.dailyData[date], merged.dailyData[date]);
+            mergeDayRecord(loser.dailyData[date], merged.dailyData[date]);
         }
     }
 
-    // 3. Fusão de Arquivos (Cold Storage)
-    if (local.archives) {
-        merged.archives = merged.archives || {};
-        for (const year in local.archives) {
+    // 4. Archives
+    if (loser.archives) {
+        (merged as any).archives = merged.archives || {};
+        for (const year in loser.archives) {
             if (!merged.archives[year]) {
-                merged.archives[year] = local.archives[year];
-            } else {
-                try {
-                    const [localYearData, incomingYearData] = await Promise.all([
-                        hydrateArchive(local.archives[year]),
-                        hydrateArchive(merged.archives[year])
-                    ]);
-                    
-                    for (const date in localYearData) {
-                        if (!incomingYearData[date]) {
-                            incomingYearData[date] = localYearData[date];
-                        } else {
-                            mergeDayRecord(localYearData[date], incomingYearData[date]);
-                        }
-                    }
-                    
-                    const compressed = await compressString(JSON.stringify(incomingYearData));
-                    merged.archives[year] = `${GZIP_PREFIX}${compressed}`;
-                } catch (e) {
-                    console.error(`Deep merge failed for ${year}`, e);
-                }
+                (merged.archives as any)[year] = loser.archives[year];
             }
         }
     }
-
-    // 4. Metadados
-    merged.lastModified = Date.now();
-    merged.version = Math.max(local.version, incoming.version);
     
-    merged.notificationsShown = Array.from(new Set([...incoming.notificationsShown, ...local.notificationsShown]));
-    merged.pending21DayHabitIds = Array.from(new Set([...incoming.pending21DayHabitIds, ...local.pending21DayHabitIds]));
-    merged.pendingConsolidationHabitIds = Array.from(new Set([...incoming.pendingConsolidationHabitIds, ...local.pendingConsolidationHabitIds]));
+    merged.lastModified = Date.now();
+    // @ts-ignore
+    merged.version = Math.max(local.version || 0, incoming.version || 0);
+    
+    const mergeList = (a: readonly any[] | undefined, b: readonly any[] | undefined) => 
+        Array.from(new Set([...(a||[]), ...(b||[])]));
+
+    // @ts-ignore
+    merged.notificationsShown = mergeList(merged.notificationsShown, loser.notificationsShown);
+    // @ts-ignore
+    merged.pending21DayHabitIds = mergeList(merged.pending21DayHabitIds, loser.pending21DayHabitIds);
+    // @ts-ignore
+    merged.pendingConsolidationHabitIds = mergeList(merged.pendingConsolidationHabitIds, loser.pendingConsolidationHabitIds);
 
     return merged;
 }

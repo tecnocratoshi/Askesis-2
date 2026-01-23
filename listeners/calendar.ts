@@ -6,361 +6,307 @@
 
 /**
  * @file listeners/calendar.ts
- * @description Controlador de Interação do Calendário (Strip & Full Almanac).
- * 
- * [MAIN THREAD CONTEXT]:
- * Otimizado para 60fps em navegação e gestos.
- * 
- * ARQUITETURA (SOTA):
- * - **Static State Machine:** Evita alocação de closures para timers e handlers de eventos.
- * - **Async Layout (RAF):** Separa leitura de geometria (DOM Read) da escrita de estilo (DOM Write).
- * - **Event Delegation:** Um único listener gerencia todos os dias.
- * - **Directional Animation:** Aplica classes CSS manuais para feedback espacial (Passado/Futuro) sem usar View Transitions.
+ * @description Controlador de Interação do Calendário (Gestos e Infinite Scroll).
  */
 
 import { ui } from '../render/ui';
-import { state, DAYS_IN_CALENDAR } from '../state';
-import { renderApp, renderFullCalendar, openModal, scrollToToday, closeModal } from '../render';
-import { parseUTCIsoDate, triggerHaptic, getTodayUTCIso, addDays, toUTCIsoDateString } from '../utils';
-import { DOM_SELECTORS, CSS_CLASSES } from '../render/constants';
-import { markAllHabitsForDate } from '../habitActions';
+import { state } from '../state';
+import { renderApp, renderFullCalendar, openModal, closeModal } from '../render';
+import { appendDayToStrip, prependDayToStrip, scrollToSelectedDate } from '../render/calendar';
+import { parseUTCIsoDate, triggerHaptic, getTodayUTCIso } from '../utils';
+import { CSS_CLASSES, DOM_SELECTORS } from '../render/constants';
+import { markAllHabitsForDate } from '../services/habitActions';
 
-// --- STATIC CONSTANTS ---
-const LONG_PRESS_DURATION = 500;
-// SECURITY: Strict ISO 8601 Date Format (YYYY-MM-DD)
-const ISO_DATE_REGEX = /^\d{4}-\d{2}-\d{2}$/;
+// --- CONFIGURAÇÃO ADAPTATIVA ---
+const SCROLL_THRESHOLD_PX = 350; // Pixels antes da borda para disparar
+const BASE_BATCH_SIZE = 15;      // Modo Padrão: Navegação casual
+const TURBO_BATCH_SIZE = 30;     // Modo Turbo: Navegação rápida ("Viagem no tempo")
+const TURBO_TIME_WINDOW_MS = 1500; // Janela de tempo para ativar o Turbo
+const DOM_CAP = 200;             // Limite de nós no DOM
 
-// CONSTANTE DE FLUIDEZ: Margem de segurança para regenerar o calendário antes de bater na borda.
-// Garante que sempre haja dias suficientes para o scroll animar.
-const INFINITE_SCROLL_BUFFER = 4; 
-
-// --- STATIC STATE MACHINE (Hot Memory) ---
+// --- STATE MACHINE ---
 const CalendarGestureState = {
-    timerId: 0,
-    isLongPress: 0, // 0 | 1 (Int32)
+    isScrolling: false,
+    scrollRafId: 0,
+    // Long press logic
+    pressTimerId: 0,
+    isLongPress: false,
     activeDateISO: null as string | null,
-    targetDayEl: null as HTMLElement | null
+    // Heurística de Engajamento
+    lastFetchTime: 0
 };
 
-// --- HELPERS ---
+// --- SCROLL LOGIC (ADAPTIVE INFINITE) ---
 
-function _clearGestureTimer() {
-    if (CalendarGestureState.timerId) {
-        clearTimeout(CalendarGestureState.timerId);
-        CalendarGestureState.timerId = 0;
-    }
-    // Cleanup reference to prevent memory leaks if element is removed
-    CalendarGestureState.targetDayEl = null;
-}
+const _handleScroll = () => {
+    if (CalendarGestureState.isScrolling) return;
+    CalendarGestureState.isScrolling = true;
 
-// HELPER: Centraliza a lógica de reconstrução do array de datas
-function _regenerateCalendarDates(centerDate: Date) {
-    const halfRange = Math.floor(DAYS_IN_CALENDAR / 2); // 30
-    state.calendarDates = Array.from({ length: DAYS_IN_CALENDAR }, (_, i) => 
-        addDays(centerDate, i - halfRange)
-    );
-    state.uiDirtyState.calendarVisuals = true;
-}
-
-/**
- * Executa a lógica visual do Long Press (Popover).
- * Separado em fase de Leitura e Escrita para evitar Layout Thrashing.
- */
-function _executeLongPressVisuals(dayItem: HTMLElement, dateISO: string) {
-    // CHAOS FIX: ZOMBIE POPOVER GUARD
-    // Se o elemento foi removido do DOM (ex: infinite scroll reciclou a lista), abortamos.
-    if (!dayItem.isConnected) {
-        return;
-    }
-
-    CalendarGestureState.isLongPress = 1;
-    dayItem.classList.add('is-pressing');
-    triggerHaptic('medium');
+    if (CalendarGestureState.scrollRafId) cancelAnimationFrame(CalendarGestureState.scrollRafId);
     
-    CalendarGestureState.activeDateISO = dateISO;
+    CalendarGestureState.scrollRafId = requestAnimationFrame(() => {
+        const strip = ui.calendarStrip;
+        if (!strip) { CalendarGestureState.isScrolling = false; return; }
 
-    // 1. READ PHASE (Synchronous)
-    const rect = dayItem.getBoundingClientRect();
-    const windowWidth = window.innerWidth;
-    
-    // 2. WRITE PHASE (Async / RAF)
-    requestAnimationFrame(() => {
-        // Double check inside RAF as well
-        if (!dayItem.isConnected) return;
+        const scrollLeft = strip.scrollLeft;
+        const scrollWidth = strip.scrollWidth;
+        const clientWidth = strip.clientWidth;
+        const maxScroll = scrollWidth - clientWidth; // Distância máxima rolável
 
-        const modal = ui.calendarQuickActions;
-        const modalContent = modal.querySelector<HTMLElement>('.quick-actions-content');
+        // HEURÍSTICA ADAPTATIVA:
+        // Determina a intenção do usuário baseada na velocidade de consumo de dados.
+        const now = Date.now();
+        const isTurbo = (now - CalendarGestureState.lastFetchTime) < TURBO_TIME_WINDOW_MS;
+        const currentBatch = isTurbo ? TURBO_BATCH_SIZE : BASE_BATCH_SIZE;
 
-        if (!modalContent) return;
+        // 1. Chegou no início (Passado) -> Prepend
+        if (scrollLeft < SCROLL_THRESHOLD_PX) {
+            CalendarGestureState.lastFetchTime = now;
+            
+            const firstEl = strip.firstElementChild as HTMLElement;
+            if (firstEl && firstEl.dataset.date) {
+                let currentFirstISO = firstEl.dataset.date;
+                
+                // Batch Creation in Fragment (Otimização de Reflow)
+                const frag = document.createDocumentFragment();
+                for (let i = 0; i < currentBatch; i++) {
+                    currentFirstISO = prependDayToStrip(currentFirstISO, frag);
+                }
+                
+                // SCROLL ANCHORING: Medir largura antiga para ajustar scroll
+                const oldWidth = strip.scrollWidth;
+                strip.insertBefore(frag, strip.firstElementChild);
+                const newWidth = strip.scrollWidth;
+                
+                // Ajusta o scroll para manter o usuário parado visualmente (Anti-Jumping)
+                strip.scrollLeft += (newWidth - oldWidth);
 
-        const top = rect.bottom + 8;
-        const centerPoint = rect.left + rect.width / 2;
-        const modalWidth = 240; 
-        const padding = 8; 
+                // DOM CAP: Remove do final se muito grande para poupar memória
+                if (strip.children.length > DOM_CAP) {
+                    for (let i = 0; i < currentBatch; i++) strip.lastElementChild?.remove();
+                }
+            }
+        }
+        
+        // 2. Chegou no final (Futuro) -> Append
+        else if (maxScroll - scrollLeft < SCROLL_THRESHOLD_PX) {
+            CalendarGestureState.lastFetchTime = now;
+            
+            const lastEl = strip.lastElementChild as HTMLElement;
+            if (lastEl && lastEl.dataset.date) {
+                let currentLastISO = lastEl.dataset.date;
+                
+                const frag = document.createDocumentFragment();
+                for (let i = 0; i < currentBatch; i++) {
+                    currentLastISO = appendDayToStrip(currentLastISO, frag);
+                }
+                strip.appendChild(frag);
 
-        let finalLeft = centerPoint;
-        let translateX = '-50%';
-
-        const halfModalWidth = modalWidth / 2;
-        const leftEdge = centerPoint - halfModalWidth;
-        const rightEdge = centerPoint + halfModalWidth;
-
-        // Edge Detection
-        if (leftEdge < padding) {
-            finalLeft = padding;
-            translateX = '0%';
-        } else if (rightEdge > windowWidth - padding) {
-            finalLeft = windowWidth - padding;
-            translateX = '-100%';
+                // DOM CAP: Remove do início
+                if (strip.children.length > DOM_CAP) {
+                    const removeCount = currentBatch;
+                    // Ao remover do início, o scrollLeft muda automaticamente.
+                    // Precisamos compensar essa mudança para manter a posição relativa.
+                    const oldWidth = strip.scrollWidth;
+                    for (let i = 0; i < removeCount; i++) strip.firstElementChild?.remove();
+                    const newWidth = strip.scrollWidth;
+                    
+                    strip.scrollLeft -= (oldWidth - newWidth);
+                }
+            }
         }
 
-        // Direct Style Write (Composite Layer)
-        modal.style.setProperty('--actions-top', `${top}px`);
-        modal.style.setProperty('--actions-left', `${finalLeft}px`);
-        modalContent.style.setProperty('--translate-x', translateX);
-
-        openModal(modal, undefined, () => {
-            CalendarGestureState.activeDateISO = null;
-        });
-        
-        // Cleanup visual state
-        dayItem.classList.remove('is-pressing');
+        CalendarGestureState.isScrolling = false;
     });
-}
-
-/**
- * Atualiza a data e renderiza com animação direcional.
- * @param date Nova data ISO.
- * @param forcedDirection Opcional: 1 (Futuro/Direita), -1 (Passado/Esquerda). Se omitido, é inferido.
- */
-function updateSelectedDateAndRender(date: string, forcedDirection?: number) {
-    if (state.selectedDate !== date) {
-        // 1. Inferir Direção: Se a nova data é maior, estamos indo para o futuro (1).
-        const dir = forcedDirection !== undefined 
-            ? forcedDirection 
-            : (date > state.selectedDate ? 1 : -1);
-
-        state.selectedDate = date;
-        state.uiDirtyState.calendarVisuals = true;
-        state.uiDirtyState.habitListStructure = true;
-        state.uiDirtyState.chartData = true;
-        
-        // 2. Renderizar Dados (DOM Update)
-        renderApp();
-
-        // 3. Aplicar Animação CSS no Container Principal
-        requestAnimationFrame(() => {
-            const container = ui.habitContainer;
-            if (!container) return;
-
-            // Reset: Remove classes anteriores para permitir re-trigger da animação
-            container.classList.remove('anim-slide-left', 'anim-slide-right');
-            
-            // Force Reflow: Necessário para o navegador registrar que a classe foi removida e adicionada novamente
-            void container.offsetWidth; 
-            
-            // Aplica a classe baseada na direção
-            if (dir === 1) {
-                // Indo para o Futuro -> Conteúdo entra da Direita
-                container.classList.add('anim-slide-right');
-            } else {
-                // Indo para o Passado -> Conteúdo entra da Esquerda
-                container.classList.add('anim-slide-left');
-            }
-        });
-    }
-}
-
-// --- STATIC EVENT HANDLERS (Zero-Allocation) ---
-
-const _handlePointerUp = () => {
-    _clearGestureTimer();
-    window.removeEventListener('pointerup', _handlePointerUp);
-    window.removeEventListener('pointercancel', _handlePointerUp);
 };
+
+// --- CLICK & GESTURE HANDLERS ---
 
 const _handlePointerDown = (e: PointerEvent) => {
     if (e.button !== 0) return;
-    
-    const dayItem = (e.target as HTMLElement).closest<HTMLElement>(DOM_SELECTORS.DAY_ITEM);
-    if (!dayItem || !dayItem.dataset.date) return;
+    const item = (e.target as HTMLElement).closest<HTMLElement>(DOM_SELECTORS.DAY_ITEM);
+    if (!item || !item.dataset.date) return;
 
-    // SECURITY: Validação de Formato de Data antes de processar
-    if (!ISO_DATE_REGEX.test(dayItem.dataset.date)) {
-        console.warn("Invalid date format in calendar item.");
-        return;
-    }
+    CalendarGestureState.isLongPress = false;
+    CalendarGestureState.activeDateISO = item.dataset.date;
+    item.classList.add('is-pressing');
 
-    CalendarGestureState.isLongPress = 0;
-    CalendarGestureState.targetDayEl = dayItem;
-    const dateISO = dayItem.dataset.date;
+    CalendarGestureState.pressTimerId = window.setTimeout(() => {
+        CalendarGestureState.isLongPress = true;
+        triggerHaptic('medium');
+        item.classList.remove('is-pressing');
+        _openQuickActions(item);
+    }, 500); // 500ms Long Press
 
-    // Start Timer
-    CalendarGestureState.timerId = window.setTimeout(() => {
-        _executeLongPressVisuals(dayItem, dateISO);
-    }, LONG_PRESS_DURATION);
-
-    // Attach self-cleaning listeners
-    window.addEventListener('pointerup', _handlePointerUp, { once: true });
-    window.addEventListener('pointercancel', _handlePointerUp, { once: true });
+    const cancel = () => {
+        clearTimeout(CalendarGestureState.pressTimerId);
+        item.classList.remove('is-pressing');
+        window.removeEventListener('pointerup', cancel);
+        window.removeEventListener('pointercancel', cancel);
+    };
+    window.addEventListener('pointerup', cancel, { once: true });
+    window.addEventListener('pointercancel', cancel, { once: true });
 };
 
-const _handleCalendarClick = (e: MouseEvent) => {
+const _handleStripClick = (e: MouseEvent) => {
     if (CalendarGestureState.isLongPress) {
         e.preventDefault();
         e.stopPropagation();
-        CalendarGestureState.isLongPress = 0;
         return;
     }
 
-    const dayItem = (e.target as HTMLElement).closest<HTMLElement>(DOM_SELECTORS.DAY_ITEM);
-    const dateISO = dayItem?.dataset.date;
-
-    if (!dayItem || !dateISO) return;
-
-    // SECURITY: Validação de Data
-    if (!ISO_DATE_REGEX.test(dateISO)) {
-        console.warn("Attempt to navigate to invalid date detected and blocked.");
-        return;
-    }
-
-    triggerHaptic('selection');
+    // FIX: Ler a data do DOM (Dataset) elimina erros de cálculo de índice após saltos.
+    const item = (e.target as HTMLElement).closest<HTMLElement>(DOM_SELECTORS.DAY_ITEM);
     
-    // NAVIGATION: Infer direction automatically
-    updateSelectedDateAndRender(dateISO);
-    
-    // UX FIX: Force 'Standard Position' (End alignment) when clicking 'Today' manually.
-    if (dateISO === getTodayUTCIso()) {
-            requestAnimationFrame(() => {
-            const el = ui.calendarStrip.querySelector<HTMLElement>(`${DOM_SELECTORS.DAY_ITEM}[data-date="${dateISO}"]`);
-            el?.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'end' });
-            });
+    if (item && item.dataset.date) {
+        const clickedDate = item.dataset.date;
+        
+        if (state.selectedDate !== clickedDate) {
+            triggerHaptic('selection');
+            state.selectedDate = clickedDate;
+            
+            // Atualização visual rápida
+            const prev = ui.calendarStrip.querySelector(`.${CSS_CLASSES.SELECTED}`);
+            if (prev) {
+                prev.classList.remove(CSS_CLASSES.SELECTED);
+                prev.setAttribute('aria-current', 'false');
+                prev.setAttribute('tabindex', '-1');
+            }
+            item.classList.add(CSS_CLASSES.SELECTED);
+            item.setAttribute('aria-current', 'date');
+            item.setAttribute('tabindex', '0');
+            
+            // FIX SCROLL JUMP: Removemos scrollToSelectedDate(true) daqui.
+            // O usuário clicou, o item já está visível. Não queremos mover a fita.
+            
+            // Render App Content (Habits)
+            state.uiDirtyState.habitListStructure = true;
+            state.uiDirtyState.chartData = true;
+            document.dispatchEvent(new CustomEvent('render-app'));
+        }
     }
+};
+
+const _openQuickActions = (anchorEl: HTMLElement) => {
+    const dateISO = anchorEl.dataset.date;
+    if (!dateISO) return;
+    
+    const rect = anchorEl.getBoundingClientRect();
+    const modal = ui.calendarQuickActions;
+    const content = modal.querySelector<HTMLElement>('.quick-actions-content');
+    if (!content) return;
+
+    const top = rect.bottom + 8;
+    const center = rect.left + rect.width / 2;
+    
+    modal.style.setProperty('--actions-top', `${top}px`);
+    modal.style.setProperty('--actions-left', `${center}px`);
+    content.style.setProperty('--translate-x', '-50%'); 
+
+    openModal(modal);
 };
 
 const _handleResetToToday = () => {
     triggerHaptic('light');
     const today = getTodayUTCIso();
     
-    // Performance optimization: Se já está em hoje, não faz nada
-    if (state.selectedDate === today) return;
-
-    // Reset Logic (Home Button Behavior)
-    const todayDate = parseUTCIsoDate(today);
-    _regenerateCalendarDates(todayDate);
-
-    // Direction Logic:
-    // Se estávamos no passado (selected < today), ir para hoje é avançar -> Futuro (1).
-    // Se estávamos no futuro (selected > today), ir para hoje é voltar -> Passado (-1).
-    const dir = today > state.selectedDate ? 1 : -1;
-
-    updateSelectedDateAndRender(today, dir);
+    const todayEl = ui.calendarStrip.querySelector(`.${CSS_CLASSES.TODAY}`);
     
-    // Scroll Síncrono para Reset.
-    const todayEl = ui.calendarStrip.querySelector<HTMLElement>(`${DOM_SELECTORS.DAY_ITEM}[data-date="${today}"]`);
-    if (todayEl) {
-        todayEl.scrollIntoView({ behavior: 'auto', block: 'nearest', inline: 'end' });
+    if (todayEl && state.selectedDate === today) {
+        scrollToSelectedDate(true);
+    } else {
+        // Reset Total: Limpa e recria em volta de hoje
+        state.selectedDate = today;
+        state.uiDirtyState.calendarVisuals = true; 
+        state.uiDirtyState.habitListStructure = true;
+        renderApp();
     }
 };
 
-const _handleStep = (direction: number) => {
-    // SECURITY: Garante que a data atual do estado é válida
-    if (!ISO_DATE_REGEX.test(state.selectedDate)) {
-        state.selectedDate = getTodayUTCIso();
+// --- FULL CALENDAR ACTIONS ---
+
+const _handleFullCalendarGridClick = (e: MouseEvent) => {
+    const dayEl = (e.target as HTMLElement).closest('.full-calendar-day') as HTMLElement;
+    
+    if (dayEl && dayEl.dataset.date && !dayEl.classList.contains('other-month')) {
+        const date = dayEl.dataset.date;
+        triggerHaptic('selection');
+        
+        state.selectedDate = date;
+        closeModal(ui.fullCalendarModal);
+        
+        // TELETRANSPORTE (Hard Reset):
+        // 1. Recria a fita na nova data (renderApp -> renderCalendar)
+        state.uiDirtyState.calendarVisuals = true;
+        state.uiDirtyState.habitListStructure = true;
+        renderApp(); 
+        
+        // 2. Ajusta o scroll instantaneamente (sem animação) para evitar "viagem" visual
+        requestAnimationFrame(() => scrollToSelectedDate(false));
     }
-
-    const currentDate = parseUTCIsoDate(state.selectedDate);
-    const newDate = addDays(currentDate, direction);
-    const newDateStr = toUTCIsoDateString(newDate);
-    const todayISO = getTodayUTCIso();
-    
-    triggerHaptic('selection');
-    
-    // INFINITE SCROLL LOGIC:
-    // Mantém a rolagem suave sem reset estrutural ao navegar dia-a-dia
-    const currentIndex = state.calendarDates.findIndex(d => toUTCIsoDateString(d) === newDateStr);
-    const nearStart = currentIndex !== -1 && currentIndex < INFINITE_SCROLL_BUFFER;
-    const nearEnd = currentIndex !== -1 && currentIndex > (state.calendarDates.length - 1 - INFINITE_SCROLL_BUFFER);
-    const notFound = currentIndex === -1;
-
-    if (notFound || nearStart || nearEnd) {
-        _regenerateCalendarDates(newDate);
-    }
-
-    // Direction: -1 (Left/Past), 1 (Right/Future)
-    updateSelectedDateAndRender(newDateStr, direction);
-    
-    requestAnimationFrame(() => {
-        const newSelectedEl = ui.calendarStrip.querySelector<HTMLElement>(`${DOM_SELECTORS.DAY_ITEM}[data-date="${newDateStr}"]`);
-        if (newSelectedEl) {
-            const align = newDateStr === todayISO ? 'end' : 'center';
-            newSelectedEl.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: align });
-        }
-    });
 };
 
-const _handleKeyDown = (e: KeyboardEvent) => {
-    if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
-    e.preventDefault();
-    const direction = e.key === 'ArrowLeft' ? -1 : 1;
-    _handleStep(direction);
+const _handleFullCalendarPrevClick = () => {
+    if (!state.fullCalendar) return;
+    let { month, year } = state.fullCalendar;
+    month--;
+    if (month < 0) { month = 11; year--; }
+    state.fullCalendar = { month, year };
+    renderFullCalendar();
+    triggerHaptic('light');
 };
 
-// --- INITIALIZATION ---
+const _handleFullCalendarNextClick = () => {
+    if (!state.fullCalendar) return;
+    let { month, year } = state.fullCalendar;
+    month++;
+    if (month > 11) { month = 0; year++; }
+    state.fullCalendar = { month, year };
+    renderFullCalendar();
+    triggerHaptic('light');
+};
+
+// --- SETUP ---
 
 export function setupCalendarListeners() {
-    // 1. Gesture Recognition (Long Press)
+    // Strip Interactions
     ui.calendarStrip.addEventListener('pointerdown', _handlePointerDown);
+    ui.calendarStrip.addEventListener('click', _handleStripClick);
+    ui.calendarStrip.addEventListener('scroll', _handleScroll, { passive: true });
     
-    // 2. Cancellation Triggers (Scroll/Move)
-    const cancelGestures = () => _clearGestureTimer();
-    ui.calendarStrip.addEventListener('pointerleave', cancelGestures);
-    ui.calendarStrip.addEventListener('scroll', cancelGestures, { passive: true });
-
-    // 3. Selection Interaction
-    ui.calendarStrip.addEventListener('click', _handleCalendarClick);
-    
-    // 4. Keyboard Nav (Mantém navegação passo-a-passo)
-    ui.calendarStrip.addEventListener('keydown', _handleKeyDown);
-
-    // 5. Header Actions (Reset to Today)
+    // Navigation Buttons
     ui.headerTitle.addEventListener('click', _handleResetToToday);
-
-    // 6. Navigation Arrows (UPDATE: Jump to Today)
     ui.navArrowPast.addEventListener('click', _handleResetToToday);
     ui.navArrowFuture.addEventListener('click', _handleResetToToday);
 
-    // 7. Quick Actions (Popover) Logic
+    // Quick Actions Logic
     const _handleQuickAction = (action: 'completed' | 'snoozed' | 'almanac') => {
         const date = CalendarGestureState.activeDateISO;
         closeModal(ui.calendarQuickActions);
         
         if (action === 'almanac') {
             triggerHaptic('light');
-            // Lazy load state for almanac
-            if (!ISO_DATE_REGEX.test(state.selectedDate)) {
-                state.selectedDate = getTodayUTCIso();
+            if (date) {
+                const d = parseUTCIsoDate(date);
+                state.fullCalendar = { year: d.getUTCFullYear(), month: d.getUTCMonth() };
             }
-            
-            state.fullCalendar = {
-                year: parseUTCIsoDate(state.selectedDate).getUTCFullYear(),
-                month: parseUTCIsoDate(state.selectedDate).getUTCMonth()
-            };
             renderFullCalendar();
             openModal(ui.fullCalendarModal);
             return;
         }
 
         if (date) {
-            const hapticType = action === 'completed' ? 'success' : 'medium';
-            triggerHaptic(hapticType);
-            if (markAllHabitsForDate(date, action)) {
-                renderApp();
-            }
+            triggerHaptic(action === 'completed' ? 'success' : 'medium');
+            markAllHabitsForDate(date, action);
         }
     };
 
     ui.quickActionDone.addEventListener('click', () => _handleQuickAction('completed'));
     ui.quickActionSnooze.addEventListener('click', () => _handleQuickAction('snoozed'));
     ui.quickActionAlmanac.addEventListener('click', () => _handleQuickAction('almanac'));
+
+    // Full Calendar Controls
+    ui.fullCalendarPrevBtn.addEventListener('click', _handleFullCalendarPrevClick);
+    ui.fullCalendarNextBtn.addEventListener('click', _handleFullCalendarNextClick);
+    ui.fullCalendarGrid.addEventListener('click', _handleFullCalendarGridClick);
 }

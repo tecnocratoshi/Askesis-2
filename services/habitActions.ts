@@ -1,4 +1,3 @@
-
 /**
  * @license
  * SPDX-License-Identifier: Apache-2.0
@@ -42,6 +41,7 @@ import { runWorkerTask } from './cloud';
 import { apiFetch, clearKey } from './api';
 import { HabitService } from './HabitService';
 
+// Assumindo que a pasta 'data' está na raiz (src/data). Se estiver em services/data, use ./data
 import { PREDEFINED_HABITS } from '../data/predefinedHabits'; 
 
 const ARCHIVE_DAYS_THRESHOLD = 90;
@@ -520,7 +520,6 @@ export function requestHabitPermanentDeletion(habitId: string) {
 export function graduateHabit(habitId: string) { const h = state.habits.find(x => x.id === habitId); if (h) { h.graduatedOn = getSafeDate(state.selectedDate); _notifyChanges(true); triggerHaptic('success'); } }
 
 export async function resetApplicationData() { 
-    // 1. Visually reset UI immediately (Feedback)
     state.habits = []; 
     state.dailyData = {}; 
     state.archives = {}; 
@@ -528,38 +527,17 @@ export async function resetApplicationData() {
     state.pending21DayHabitIds = []; 
     state.pendingConsolidationHabitIds = [];
     state.monthlyLogs = new Map();
-    
-    // Dispara atualização para limpar a tela antes do reload
-    document.dispatchEvent(new CustomEvent('render-app'));
 
     try { 
-        // 2. Nuke persistence (Atomic & Blocking)
+        await saveState();
         await clearLocalPersistence(); 
-    } catch (e) {
-        console.error("Reset failed partially", e);
     } finally { 
-        // 3. Nuke Key
         clearKey(); 
-        // 4. Force Reload
-        window.location.reload(); 
+        location.reload(); 
     } 
 }
 
-export function handleSaveNote() { 
-    if (!state.editingNoteFor) return; 
-    
-    const { habitId, date, time } = state.editingNoteFor;
-    const val = ui.notesTextarea.value.trim();
-    const inst = ensureHabitInstanceData(date, habitId, time);
-    
-    if ((inst.note || '') !== val) { 
-        inst.note = val || undefined; 
-        state.uiDirtyState.habitListStructure = true; 
-        saveState(); 
-        document.dispatchEvent(new CustomEvent('render-app')); 
-    } 
-    closeModal(ui.notesModal); 
-}
+export function handleSaveNote() { if (!state.editingNoteFor) return; const { habitId, date, time } = state.editingNoteFor, val = ui.notesTextarea.value.trim(), inst = ensureHabitInstanceData(date, habitId, time); if ((inst.note || '') !== val) { inst.note = val || undefined; state.uiDirtyState.habitListStructure = true; saveState(); document.dispatchEvent(new CustomEvent('render-app')); } closeModal(ui.notesModal); }
 
 export function setGoalOverride(habitId: string, d: string, t: TimeOfDay, v: number) { 
     try {
@@ -628,22 +606,7 @@ export function exportData() {
     URL.revokeObjectURL(url);
 }
 
-export function handleDayTransition() { 
-    const today = getTodayUTCIso(); 
-    
-    clearActiveHabitsCache(); 
-    
-    state.uiDirtyState.calendarVisuals = true;
-    state.uiDirtyState.habitListStructure = true;
-    state.uiDirtyState.chartData = true; 
-    state.calendarDates = []; 
-    
-    if (state.selectedDate !== today) {
-        state.selectedDate = today; 
-    }
-    
-    document.dispatchEvent(new CustomEvent('render-app')); 
-}
+export function handleDayTransition() { const today = getTodayUTCIso(); clearActiveHabitsCache(); state.uiDirtyState.calendarVisuals = state.uiDirtyState.habitListStructure = state.uiDirtyState.chartData = true; state.calendarDates = []; if (state.selectedDate !== today) state.selectedDate = today; document.dispatchEvent(new CustomEvent('render-app')); }
 
 function _processAndFormatCelebrations(
     pendingIds: string[], 

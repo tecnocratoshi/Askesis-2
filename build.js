@@ -72,7 +72,8 @@ async function copyStaticFiles() {
 }
 
 const esbuildOptions = {
-    entryPoints: { 'bundle': 'index.tsx', 'sync-worker': 'services/sync.worker.ts' },
+    // CORREÇÃO: Removido 'sync-worker' pois agora ele é inline (blob)
+    entryPoints: { 'bundle': 'index.tsx' },
     bundle: true,
     splitting: true,
     outdir: outdir,
