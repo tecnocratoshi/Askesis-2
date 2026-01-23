@@ -77,7 +77,6 @@ export interface HabitSchedule {
     readonly scheduleAnchor: string;
 }
 
-// --- FIX: Added HabitTemplate and PredefinedHabit exported interfaces ---
 export interface HabitTemplate {
     readonly icon: string;
     readonly color: string;
@@ -177,7 +176,6 @@ const _createMonomorphicDailyInfo = (): HabitDailyInfo => ({ instances: {}, dail
 const _createMonomorphicInstance = (): HabitDayData => ({ goalOverride: undefined, note: undefined });
 
 // --- APPLICATION STATE ---
-// @fix: Added monthlyLogs and other missing properties to the state singleton.
 export const state: {
     habits: Habit[];
     lastModified: number;
@@ -250,10 +248,6 @@ export const state: {
 };
 
 // --- STATE ACCESSORS & MUTATORS ---
-
-/**
- * @fix: Added missing state accessors and mutators.
- */
 
 export function getHabitDailyInfoForDate(dateISO: string): Record<string, HabitDailyInfo> {
     return state.dailyData[dateISO] || {};

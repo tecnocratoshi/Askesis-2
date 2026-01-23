@@ -15,7 +15,7 @@ import { pushToOneSignal, generateUUID } from '../utils';
 import { ui } from '../render/ui';
 import { t } from '../i18n';
 import { hasLocalSyncKey, getSyncKey, apiFetch } from './api';
-import { renderApp } from '../render';
+import { renderApp, updateNotificationUI } from '../render';
 import { mergeStates } from './dataMerge';
 
 // PERFORMANCE: Debounce para evitar salvar na nuvem a cada pequena alteração
@@ -24,14 +24,6 @@ const DEBOUNCE_DELAY = 2000;
 
 let isSyncInProgress = false;
 let pendingSyncState: AppState | null = null;
-
-// --- TELEMETRY ---
-export function addSyncLog(msg: string, type: 'success' | 'error' | 'info' = 'info', icon?: string) {
-    if (!state.syncLogs) state.syncLogs = [];
-    state.syncLogs.push({ time: Date.now(), msg, type, icon });
-    if (state.syncLogs.length > 100) state.syncLogs.shift();
-    document.dispatchEvent(new CustomEvent('sync-logs-updated'));
-}
 
 // --- WORKER INFRASTRUCTURE ---
 let syncWorker: Worker | null = null;
@@ -44,10 +36,17 @@ function getWorker(): Worker {
             const { id, status, result, error } = e.data;
             const callback = workerCallbacks.get(id);
             if (callback) {
-                if (status === 'success') callback.resolve(result);
-                else callback.reject(new Error(error));
+                if (status === 'success') {
+                    callback.resolve(result);
+                } else {
+                    callback.reject(new Error(error));
+                }
                 workerCallbacks.delete(id);
             }
+        };
+        
+        syncWorker.onerror = (e) => {
+            console.error("Critical Worker Error:", e);
         };
     }
     return syncWorker;
@@ -61,6 +60,21 @@ export function runWorkerTask<T>(type: 'encrypt' | 'decrypt' | 'build-ai-prompt'
     });
 }
 
+// --- SYNC LOGGING ---
+/**
+ * Adiciona um registro de log ao estado global para auditoria e diagnóstico de sincronização.
+ */
+export function addSyncLog(msg: string, type: 'success' | 'error' | 'info', icon?: string) {
+    if (!state.syncLogs) {
+        (state as any).syncLogs = [];
+    }
+    state.syncLogs.push({ time: Date.now(), msg, type, icon });
+    // Mantém apenas os últimos 50 logs para evitar consumo excessivo de memória
+    if (state.syncLogs.length > 50) {
+        state.syncLogs.shift();
+    }
+}
+
 interface ServerPayload {
     lastModified: number;
     state: string;
@@ -68,110 +82,149 @@ interface ServerPayload {
 
 export function setSyncStatus(statusKey: 'syncSaving' | 'syncSynced' | 'syncError' | 'syncInitial') {
     state.syncState = statusKey;
-    if (ui.syncStatus) ui.syncStatus.textContent = t(statusKey);
+    if (ui.syncStatus) {
+        ui.syncStatus.textContent = t(statusKey);
+    }
+}
+
+export function setupNotificationListeners() {
+    pushToOneSignal((OneSignal: any) => {
+        OneSignal.Notifications.addEventListener('permissionChange', () => {
+            setTimeout(updateNotificationUI, 500);
+        });
+        updateNotificationUI();
+    });
 }
 
 async function resolveConflictWithServerState(serverPayload: ServerPayload) {
-    addSyncLog("Conflito detectado. Iniciando Smart Merge...", "info", "🧩");
+    console.warn("Sync conflict detected. Initiating Smart Merge sequence.");
+    
     const syncKey = getSyncKey();
-    if (!syncKey) return setSyncStatus('syncError');
+    if (!syncKey) {
+        console.error("Cannot resolve conflict without sync key.");
+        setSyncStatus('syncError');
+        return;
+    }
     
     try {
         const serverState = await runWorkerTask<AppState>('decrypt', serverPayload.state, syncKey);
         const localState = getPersistableState();
         const mergedState = await mergeStates(localState, serverState);
-        
-        await persistStateLocally(mergedState, true); 
+        console.log("Smart Merge completed successfully.");
+
+        await persistStateLocally(mergedState, true); // Suppress sync loop
         await loadState(mergedState);
         
-        // CACHE INVALIDATION: Force Re-render
+        // REPAIR: Manual dirty flag to force render/habits.ts to process the merged data
         state.uiDirtyState.habitListStructure = true;
         state.uiDirtyState.calendarVisuals = true;
         state.uiDirtyState.chartData = true;
 
         renderApp();
-        setSyncStatus('syncSynced');
-        addSyncLog("Fusão concluída e sincronizada.", "success", "✅");
+        setSyncStatus('syncSynced'); 
+        document.dispatchEvent(new CustomEvent('habitsChanged'));
+
         syncStateWithCloud(mergedState, true);
-    } catch (error: any) {
-        addSyncLog(`Falha na resolução: ${error.message}`, "error", "❌");
+        
+    } catch (error) {
+        console.error("Failed to resolve conflict with server state:", error);
         setSyncStatus('syncError');
     }
 }
 
 async function performSync() {
-    if (isSyncInProgress || !pendingSyncState) return;
+    if (isSyncInProgress || !pendingSyncState) {
+        return;
+    }
+
     isSyncInProgress = true;
     const appState = pendingSyncState;
-    pendingSyncState = null;
+    pendingSyncState = null; 
 
     const syncKey = getSyncKey();
-    if (!syncKey) { isSyncInProgress = false; return setSyncStatus('syncError'); }
+    if (!syncKey) {
+        setSyncStatus('syncError');
+        console.error("Cannot sync without a sync key.");
+        isSyncInProgress = false; 
+        return;
+    }
 
     try {
-        addSyncLog("Preparando payload (POJO Bridge)...", "info", "🔒");
+        const encryptedState = await runWorkerTask<string>('encrypt', appState, syncKey);
+
+        const payload: ServerPayload = {
+            lastModified: appState.lastModified,
+            state: encryptedState,
+        };
         
-        // Structured Clone handles BigInt, but we need to ensure Map is hydrated/compatible
-        const cloneableState = { ...appState };
-        
-        const encryptedState = await runWorkerTask<string>('encrypt', cloneableState, syncKey);
-        const payload: ServerPayload = { lastModified: appState.lastModified, state: encryptedState };
-        
-        addSyncLog(`Upload iniciado (${(encryptedState.length / 1024).toFixed(1)}KB)...`, "info", "⬆️");
-        const response = await apiFetch('/api/sync', { method: 'POST', body: JSON.stringify(payload) }, true);
+        const response = await apiFetch('/api/sync', {
+            method: 'POST',
+            body: JSON.stringify(payload),
+        }, true);
 
         if (response.status === 409) {
             const serverPayload: ServerPayload = await response.json();
             await resolveConflictWithServerState(serverPayload);
-        } else if (response.ok) {
-            setSyncStatus('syncSynced');
-            addSyncLog("Sincronização na nuvem com sucesso.", "success", "✅");
-            document.dispatchEvent(new CustomEvent('habitsChanged'));
         } else {
-            throw new Error(`HTTP ${response.status}`);
+            setSyncStatus('syncSynced');
+            document.dispatchEvent(new CustomEvent('habitsChanged')); 
         }
-    } catch (error: any) {
-        addSyncLog(`Erro de sincronização: ${error.message}`, "error", "❌");
+    } catch (error) {
+        console.error("Error syncing state to cloud:", error);
         setSyncStatus('syncError');
     } finally {
         isSyncInProgress = false;
-        if (pendingSyncState) performSync();
+        
+        if (pendingSyncState) {
+            if (syncTimeout) clearTimeout(syncTimeout);
+            performSync();
+        }
     }
 }
 
 export function syncStateWithCloud(appState: AppState, immediate = false) {
     if (!hasLocalSyncKey()) return;
-    pendingSyncState = appState;
+
+    pendingSyncState = appState; 
     setSyncStatus('syncSaving');
+
     if (syncTimeout) clearTimeout(syncTimeout);
-    if (isSyncInProgress) return;
-    if (immediate) performSync();
-    else syncTimeout = window.setTimeout(performSync, DEBOUNCE_DELAY);
+    
+    if (isSyncInProgress) {
+        return;
+    }
+
+    if (immediate) {
+        performSync();
+    } else {
+        syncTimeout = window.setTimeout(performSync, DEBOUNCE_DELAY);
+    }
 }
 
 export async function fetchStateFromCloud(): Promise<AppState | undefined> {
     if (!hasLocalSyncKey()) return undefined;
+
     const syncKey = getSyncKey();
     if (!syncKey) return undefined;
 
     try {
-        addSyncLog("Buscando atualizações remotas...", "info", "🔍");
         const response = await apiFetch('/api/sync', {}, true);
-        if (response.status === 401) { addSyncLog("Sessão expirada.", "error", "⚠️"); return undefined; }
         const data: ServerPayload | null = await response.json();
 
         if (data && data.state) {
-            addSyncLog("Dados recebidos. Descriptografando...", "info", "⬇️");
             const appState = await runWorkerTask<AppState>('decrypt', data.state, syncKey);
             setSyncStatus('syncSynced');
-            addSyncLog("Nuvem sincronizada.", "success", "✅");
             return appState;
-        } else if (state.habits.length > 0) {
-            syncStateWithCloud(getPersistableState(), true);
+        } else {
+            console.log("No state found in cloud for this sync key. Performing initial sync.");
+            
+            if (state.habits.length > 0 || Object.keys(state.dailyData).length > 0) {
+                syncStateWithCloud(getPersistableState(), true);
+            }
+            return undefined;
         }
-        return undefined;
-    } catch (error: any) {
-        addSyncLog(`Falha no download: ${error.message}`, "error", "❌");
+    } catch (error) {
+        console.error("Failed to fetch state from cloud:", error);
         setSyncStatus('syncError');
         throw error;
     }

@@ -65,6 +65,11 @@ async function _processKey(key: string) {
         if (cloudState) {
             const localState = getPersistableState();
 
+            // REPAIR: Sanitização manual recomendada antes do merge
+            if (cloudState.monthlyLogs && !(cloudState.monthlyLogs instanceof Map)) {
+                cloudState.monthlyLogs = new Map(Object.entries(cloudState.monthlyLogs)); 
+            }
+
             // SMART MERGE & HYDRATION
             const mergedState = await mergeStates(localState, cloudState);
             Object.assign(state, mergedState);

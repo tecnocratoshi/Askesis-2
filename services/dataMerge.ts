@@ -14,20 +14,28 @@ import { HabitService } from './HabitService';
 import { getTodayUTCIso } from '../utils';
 
 /**
- * Hidrata monthlyLogs se vieram como Array bruto (do JSON sem reviver).
+ * Hidrata monthlyLogs se vieram como Array bruto ou Objeto (do JSON sem reviver completo).
  */
 function hydrateLogs(state: AppState) {
     if (state.monthlyLogs && !(state.monthlyLogs instanceof Map)) {
+        // Se for um array de entradas (standard Map serialization) ou um objeto plano
         const entries = Array.isArray(state.monthlyLogs) 
             ? state.monthlyLogs 
             : Object.entries(state.monthlyLogs);
             
         const map = new Map<string, bigint>();
-        entries.forEach(([key, val]: [string, any]) => {
+        entries.forEach((item: any) => {
+            // Suporta [key, value] (Array) ou {key, value} (Object entries)
+            const key = Array.isArray(item) ? item[0] : item[0];
+            const val = Array.isArray(item) ? item[1] : item[1];
+            
             try {
-                // Suporta BigInt literal ou string hex "0x..."
+                // Tenta converter para BigInt se não for um.
+                // Aceita BigInt nativo, strings numéricas ou hex "0x..."
                 map.set(key, typeof val === 'bigint' ? val : BigInt(val));
-            } catch(e) {}
+            } catch(e) {
+                console.warn(`[Merge] Failed to hydrate bitmask for ${key}:`, val);
+            }
         });
         state.monthlyLogs = map;
     }
