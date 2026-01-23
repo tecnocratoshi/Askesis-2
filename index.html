@@ -38,7 +38,7 @@
             text-decoration: underline dotted;
             cursor: pointer;
             padding: 4px 8px;
-            margin: -4px -8px; /* Expande área de toque sem mover o texto */
+            margin: -4px -8px; 
             border-radius: var(--border-radius-small);
             transition: opacity 0.2s, background-color 0.2s;
             display: inline-block;
@@ -209,23 +209,57 @@
         <div class="modal-content">
             <div class="modal-header">
                 <div class="modal-header-spacer"></div>
-                <h2>Relatório de Sincronização</h2>
-                <div class="modal-header-spacer"></div>
+                <h2>Relatório de Atividade</h2>
+                <button id="clear-logs-btn" class="icon-btn" aria-label="Limpar Logs" style="font-size: 14px; width: auto; padding-inline: 10px; color: var(--color-red);">Limpar</button>
             </div>
             <style>
-                #sync-logs-list { list-style: none; padding: 0; font-family: monospace; font-size: 11px; max-height: 450px; overflow-y: auto; background: #0a0a0a; border: 1px solid var(--border-color); border-radius: var(--border-radius-base); }
-                .sync-log-entry { padding: 8px 12px; border-bottom: 1px solid #1a1a1a; line-height: 1.4; display: grid; grid-template-columns: auto auto 1fr; gap: 10px; align-items: flex-start; }
+                #sync-logs-list { 
+                    list-style: none; 
+                    padding: 0; 
+                    font-family: 'JetBrains Mono', 'Fira Code', monospace; 
+                    font-size: 11px; 
+                    max-height: 450px; 
+                    overflow-y: auto; 
+                    background: #0a0a0a; 
+                    border: 1px solid var(--border-color); 
+                    border-radius: var(--border-radius-base); 
+                }
+                .sync-log-entry { 
+                    padding: 8px 12px; 
+                    border-bottom: 1px solid #1a1a1a; 
+                    line-height: 1.4; 
+                    display: grid; 
+                    grid-template-columns: 95px 35px 1fr; 
+                    gap: 0; 
+                    align-items: center; 
+                }
                 .sync-log-entry:last-child { border-bottom: none; }
-                .log-time { color: var(--text-tertiary); opacity: 0.7; font-feature-settings: "tnum"; }
-                .log-icon { flex-shrink: 0; filter: drop-shadow(0 0 2px rgba(255,255,255,0.1)); }
-                .log-msg { color: var(--text-secondary); word-break: break-all; }
+                .log-time { 
+                    color: var(--text-tertiary); 
+                    opacity: 0.6; 
+                    font-feature-settings: "tnum"; 
+                    border-right: 1px solid #1a1a1a; 
+                    padding-right: 8px; 
+                }
+                .log-icon { 
+                    flex-shrink: 0; 
+                    text-align: center; 
+                    border-right: 1px solid #1a1a1a; 
+                    padding-right: 8px; 
+                    margin-left: 8px; 
+                }
+                .log-msg { 
+                    color: var(--text-secondary); 
+                    word-break: break-all; 
+                    padding-left: 12px; 
+                }
                 
                 /* Temas de cores profissionais estilo Terminal */
                 .sync-log-entry.success .log-msg { color: #50fa7b; }
                 .sync-log-entry.error .log-msg { color: #ff5555; }
                 .sync-log-entry.info .log-msg { color: #8be9fd; }
-                .sync-log-entry.success .log-icon { filter: drop-shadow(0 0 4px #50fa7b44); }
-                .sync-log-entry.error .log-icon { filter: drop-shadow(0 0 4px #ff555544); }
+                .sync-log-entry.success .log-icon { filter: drop-shadow(0 0 2px #50fa7b22); }
+                .sync-log-entry.error .log-icon { filter: drop-shadow(0 0 2px #ff555522); }
             </style>
             <ul id="sync-logs-list"></ul>
             <div class="modal-actions">

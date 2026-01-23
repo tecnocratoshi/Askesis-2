@@ -27,21 +27,24 @@ let pendingSyncState: AppState | null = null;
 
 // --- TELEMETRY ---
 /**
- * Adiciona um log estruturado ao sistema de telemetria.
- * @param msg Mensagem descritiva.
- * @param type Severidade visual.
- * @param icon Ícone representativo da operação.
+ * Adiciona um log estruturado ao sistema de telemetria com suporte a ícones e cores.
  */
-function addSyncLog(msg: string, type: 'success' | 'error' | 'info' = 'info', icon?: string) {
+export function addSyncLog(msg: string, type: 'success' | 'error' | 'info' = 'info', icon?: string) {
+    if (!state.syncLogs) state.syncLogs = [];
     state.syncLogs.push({ time: Date.now(), msg, type, icon });
-    if (state.syncLogs.length > 50) state.syncLogs.shift();
+    // Mantém um histórico maior para diagnóstico profundo (100 entradas)
+    if (state.syncLogs.length > 100) state.syncLogs.shift();
     document.dispatchEvent(new CustomEvent('sync-logs-updated'));
 }
 
 function getPayloadSizeString(payload: any): string {
-    const size = new TextEncoder().encode(JSON.stringify(payload)).length;
-    if (size < 1024) return `${size}B`;
-    return `${(size / 1024).toFixed(1)}KB`;
+    try {
+        const size = new TextEncoder().encode(JSON.stringify(payload)).length;
+        if (size < 1024) return `${size}B`;
+        return `${(size / 1024).toFixed(1)}KB`;
+    } catch {
+        return "N/A";
+    }
 }
 
 // --- WORKER INFRASTRUCTURE ---
@@ -64,7 +67,6 @@ function getWorker(): Worker {
     return syncWorker;
 }
 
-// @fix: Expanded type union to include 'build-quote-analysis-prompt', 'prune-habit', and 'archive' to resolve type errors in callers.
 export function runWorkerTask<T>(type: 'encrypt' | 'decrypt' | 'build-ai-prompt' | 'build-quote-analysis-prompt' | 'prune-habit' | 'archive', payload: any, key?: string): Promise<T> {
     return new Promise((resolve, reject) => {
         const id = generateUUID();
@@ -95,15 +97,16 @@ async function resolveConflictWithServerState(serverPayload: ServerPayload) {
         const serverState = await runWorkerTask<AppState>('decrypt', serverPayload.state, syncKey);
         const localState = getPersistableState();
         
-        addSyncLog("Executando fusão inteligente (Smart Merge)...", "info", "🧠");
+        // mergeStates agora cuida dos próprios logs de detalhe
         const mergedState = await mergeStates(localState, serverState);
         
-        await persistStateLocally(mergedState);
+        addSyncLog("Estado local atualizado com sucesso.", "success", "💾");
+        await persistStateLocally(mergedState, true); 
         await loadState(mergedState);
         
         renderApp();
         setSyncStatus('syncSynced');
-        addSyncLog("Conflito resolvido via Smart Merge.", "success", "✅");
+        addSyncLog("Sincronização na nuvem com sucesso.", "success", "✅");
         syncStateWithCloud(mergedState, true);
     } catch (error: any) {
         addSyncLog(`Falha na resolução de conflito: ${error.message}`, "error", "❌");
@@ -125,11 +128,14 @@ async function performSync() {
     }
 
     try {
-        const sizeInfo = getPayloadSizeString(appState);
-        addSyncLog(`Preparando dados para envio (${sizeInfo})...`, "info", "📦");
+        addSyncLog("Preparando dados para envio...", "info", "📦");
+        const rawSize = getPayloadSizeString(appState);
+        addSyncLog(`Serialização completa (${rawSize}). Cifrando...`, "info", "🔒");
         
-        addSyncLog("Cifrando dados (AES-GCM)...", "info", "🔐");
         const encryptedState = await runWorkerTask<string>('encrypt', appState, syncKey);
+        const encryptedSize = `(${(encryptedState.length / 1024).toFixed(1)}KB)`;
+        addSyncLog(`Criptografia finalizada. Payload: ${encryptedSize}`, "info", "🔐");
+        
         const payload: ServerPayload = { lastModified: appState.lastModified, state: encryptedState };
         
         addSyncLog("Iniciando upload para a nuvem...", "info", "⬆️");
@@ -138,10 +144,12 @@ async function performSync() {
         if (response.status === 409) {
             const serverPayload: ServerPayload = await response.json();
             await resolveConflictWithServerState(serverPayload);
-        } else {
+        } else if (response.ok) {
             setSyncStatus('syncSynced');
-            addSyncLog("Sincronização na nuvem concluída com sucesso.", "success", "✅");
+            addSyncLog("Sincronização na nuvem com sucesso.", "success", "✅");
             document.dispatchEvent(new CustomEvent('habitsChanged'));
+        } else {
+            throw new Error(`HTTP ${response.status}`);
         }
     } catch (error: any) {
         addSyncLog(`Erro de rede: ${error.message}`, "error", "❌");
@@ -170,14 +178,21 @@ export async function fetchStateFromCloud(): Promise<AppState | undefined> {
     try {
         addSyncLog("Verificando atualizações na nuvem...", "info", "🔍");
         const response = await apiFetch('/api/sync', {}, true);
+        
+        if (response.status === 401) {
+            addSyncLog("Chave de sincronização inválida ou expirada.", "error", "⚠️");
+            setSyncStatus('syncError');
+            return undefined;
+        }
+
         const data: ServerPayload | null = await response.json();
 
         if (data && data.state) {
             const sizeInfo = `(${(data.state.length / 1024).toFixed(1)}KB)`;
-            addSyncLog(`Dados recebidos ${sizeInfo}. Iniciando decriptografia...`, "info", "⬇️");
+            addSyncLog(`Dados recebidos ${sizeInfo}. Iniciando descarga...`, "info", "⬇️");
             const appState = await runWorkerTask<AppState>('decrypt', data.state, syncKey);
             setSyncStatus('syncSynced');
-            addSyncLog("Estado baixado e decifrado com sucesso.", "success", "✅");
+            addSyncLog("Dados descriptografados e processados com sucesso.", "success", "✅");
             return appState;
         } else if (state.habits.length > 0) {
             addSyncLog("Nuvem vazia. Iniciando upload inicial...", "info", "☁️");
@@ -185,7 +200,7 @@ export async function fetchStateFromCloud(): Promise<AppState | undefined> {
         }
         return undefined;
     } catch (error: any) {
-        addSyncLog(`Falha no download inicial: ${error.message}`, "error", "❌");
+        addSyncLog(`Falha no download: ${error.message}`, "error", "❌");
         setSyncStatus('syncError');
         throw error;
     }

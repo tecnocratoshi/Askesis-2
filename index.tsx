@@ -26,7 +26,7 @@ import { renderApp, initI18n, updateUIText } from './render';
 import { setupEventListeners } from './listeners';
 import { createDefaultHabit, handleDayTransition, performArchivalCheck } from './services/habitActions';
 import { initSync } from './listeners/sync';
-import { fetchStateFromCloud, syncStateWithCloud, setSyncStatus } from './services/cloud';
+import { fetchStateFromCloud, syncStateWithCloud, setSyncStatus, addSyncLog } from './services/cloud';
 import { hasLocalSyncKey, initAuth } from './services/api';
 import { updateAppBadge } from './services/badge';
 import { mergeStates } from './services/dataMerge';
@@ -69,11 +69,13 @@ const registerServiceWorker = () => {
 
 async function loadInitialState() {
     // 1. CARREGAMENTO IMEDIATO (Local-First)
+    addSyncLog("Iniciando aplicação...", "info", "⚡");
     await loadState();
+    addSyncLog("Estado local carregado e hidratado.", "success", "💾");
 
     // 2. SINCRONIZAÇÃO SILENCIOSA (Background)
     if (hasLocalSyncKey()) {
-        console.log("[Boot] Sync Key detectada. Iniciando Sync Silencioso...");
+        addSyncLog("Chave de sincronização detectada. Buscando atualizações...", "info", "📡");
         fetchStateFromCloud().catch(e => {
             console.warn("Silent sync failed (offline?):", e);
             setSyncStatus('syncError');

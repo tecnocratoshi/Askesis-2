@@ -58,11 +58,19 @@ export function initModalEngine() {
             closeModal(ctx.element);
         }
     });
-    // Global listener para logs reativos
+    
     document.addEventListener('sync-logs-updated', () => {
         const modal = document.getElementById('sync-debug-modal');
         if (modal?.classList.contains('visible')) renderSyncLogs();
     });
+
+    const clearBtn = document.getElementById('clear-logs-btn');
+    if (clearBtn) {
+        clearBtn.onclick = () => {
+            state.syncLogs = [];
+            renderSyncLogs();
+        };
+    }
 }
 
 export function openModal(modal: HTMLElement, focusEl?: HTMLElement, onClose?: () => void) {
@@ -115,8 +123,8 @@ function formatPreciseTime(ms: number): string {
     const h = d.getHours().toString().padStart(2, '0');
     const m = d.getMinutes().toString().padStart(2, '0');
     const s = d.getSeconds().toString().padStart(2, '0');
-    const msStr = Math.floor((d.getMilliseconds() / 100)).toString();
-    return `[${h}:${m}:${s},${msStr}]`;
+    const ds = Math.floor(d.getMilliseconds() / 100).toString();
+    return `[${h}:${m}:${s},${ds}]`;
 }
 
 export function renderSyncLogs() {
@@ -124,25 +132,23 @@ export function renderSyncLogs() {
     if (!list) return;
 
     if (!state.syncLogs || state.syncLogs.length === 0) {
-        list.innerHTML = `<li class="sync-log-entry info"><em>Nenhum registro de atividade.</em></li>`;
+        list.innerHTML = `<li class="sync-log-entry info" style="grid-template-columns: 1fr; text-align: center;"><em>Nenhum registro de atividade.</em></li>`;
         return;
     }
     
-    // Inverte o array para mostrar os mais novos no topo ou mantém ordem terminal
-    list.innerHTML = state.syncLogs.map(log => `
+    const logs = [...state.syncLogs].reverse();
+    
+    list.innerHTML = logs.map(log => `
         <li class="sync-log-entry ${log.type}">
             <span class="log-time">${formatPreciseTime(log.time)}</span>
-            ${log.icon ? `<span class="log-icon">${log.icon}</span>` : ''}
+            <span class="log-icon">${log.icon || '•'}</span>
             <span class="log-msg">${escapeHTML(log.msg)}</span>
         </li>
     `).join('');
     
-    // Otimização: Scroll para o final apenas se o usuário não estiver lendo logs antigos
-    requestAnimationFrame(() => { 
-        if (list.scrollHeight - list.scrollTop < 600) {
-            list.scrollTop = list.scrollHeight; 
-        }
-    });
+    // Como os novos estão no topo, forçamos o scroll para o topo ao renderizar
+    // Mas apenas se o usuário não tiver dado scroll manual (opcional, aqui simplificamos)
+    list.scrollTop = 0;
 }
 
 export function openSyncDebugModal() {
