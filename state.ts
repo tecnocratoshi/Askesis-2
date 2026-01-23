@@ -1,4 +1,3 @@
-
 /**
  * @license
  * SPDX-License-Identifier: Apache-2.0
@@ -234,7 +233,6 @@ export const state: {
     lastAIError: string | null;
     syncState: 'syncSaving' | 'syncSynced' | 'syncError' | 'syncInitial';
     syncLastError: string | null;
-    syncLogs: Array<{ time: number, msg: string, type: 'info' | 'error' | 'success' }>;
     fullCalendar: {
         year: number;
         month: number;
@@ -275,7 +273,6 @@ export const state: {
     lastAIError: null,
     syncState: 'syncInitial',
     syncLastError: null,
-    syncLogs: [],
     fullCalendar: {
         year: new Date().getFullYear(),
         month: new Date().getMonth(),

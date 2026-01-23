@@ -7,6 +7,14 @@
 /**
  * @file render/ui.ts
  * @description Registro Central de Referências DOM (UI Registry).
+ * 
+ * [MAIN THREAD CONTEXT]:
+ * Este módulo atua como um cache inteligente (Lazy-Loaded) para referências de elementos DOM.
+ * 
+ * ARQUITETURA (Lazy Singleton & O(1) Access):
+ * - **Lazy Access:** Elementos só são consultados no DOM (`querySelector`) na primeira vez que são acessados.
+ * - **Memoization:** Referências são cacheadas em `uiCache`, tornando acessos subsequentes instantâneos.
+ * - **Type Safety:** Interface `UIElements` garante autocompletar e verificação de tipos em todo o projeto.
  */
 
 export interface UIElements {
@@ -106,10 +114,6 @@ export interface UIElements {
     colorPickerTitle: HTMLElement;
     syncErrorMsg: HTMLElement;
     
-    // Debug Sync
-    syncDebugModal: HTMLElement;
-    syncLogsList: HTMLElement;
-    
     // Dynamic Injected Elements
     habitConscienceDisplay: HTMLElement;
     
@@ -134,23 +138,45 @@ export interface UIElements {
     }
 }
 
+// MEMORY: Cache "Flat" para acesso O(1).
+// Usamos 'any' internamente para evitar overhead de tipos complexos no runtime.
 const uiCache: Record<string, Element> = {};
 const chartCache: Record<string, Element> = {};
 
-function queryElement(selector: string): Element {
-    const isSimpleId = selector.charCodeAt(0) === 35 && !/[\s.\[]/.test(selector);
-    const element = isSimpleId ? document.getElementById(selector.slice(1)) : document.querySelector(selector);
-    if (!element && selector !== '#habit-conscience-display' && selector !== '#habit-subtitle-display') {
+/**
+ * Utilitário de consulta DOM otimizado (Micro-optimization).
+ * @param selector String seletora CSS.
+ * @param isOptional Se true, suprime erro caso elemento não seja encontrado.
+ */
+function queryElement(selector: string, isOptional = false): Element | null {
+    // PERFORMANCE OPTIMIZATION: Hybrid Selector Strategy.
+    // Detectamos seletores de ID simples para usar o caminho rápido (Fast Path).
+    const isSimpleId = selector.charCodeAt(0) === 35 /* # */ && !/[\s.\[]/.test(selector);
+    
+    const element = isSimpleId
+        ? document.getElementById(selector.slice(1))
+        : document.querySelector(selector);
+
+    if (!element && !isOptional) {
         throw new Error(`UI element "${selector}" not found.`);
     }
     return element as Element;
 }
 
-function defineLazy(target: any, prop: string, selector: string, cache: Record<string, Element>) {
+/**
+ * Configura um getter lazy no objeto alvo.
+ * @param target Objeto onde a propriedade será definida.
+ * @param prop Nome da propriedade.
+ * @param selector Seletor CSS.
+ * @param cache Objeto de cache a ser usado.
+ * @param isOptional Se true, permite que o elemento não exista no DOM inicialmente.
+ */
+function defineLazy(target: any, prop: string, selector: string, cache: Record<string, Element>, isOptional = false) {
     Object.defineProperty(target, prop, {
         get: function() {
+            // Check cache direct property access (Fastest in V8)
             if (cache[prop] === undefined) {
-                const el = queryElement(selector);
+                const el = queryElement(selector, isOptional);
                 if (el) cache[prop] = el;
                 return el;
             }
@@ -161,8 +187,11 @@ function defineLazy(target: any, prop: string, selector: string, cache: Record<s
     });
 }
 
+// Inicializa o objeto UI
 export const ui = {} as UIElements;
 
+// --- ROOT ELEMENTS DEFINITION ---
+// Batch definition avoids creating intermediate objects.
 defineLazy(ui, 'appContainer', '.app-container', uiCache);
 defineLazy(ui, 'calendarStrip', '#calendar-strip', uiCache);
 defineLazy(ui, 'headerTitle', '#header-title', uiCache);
@@ -257,11 +286,10 @@ defineLazy(ui, 'syncWarningText', '#sync-warning-text', uiCache);
 defineLazy(ui, 'syncActiveDesc', '#sync-active-desc', uiCache);
 defineLazy(ui, 'iconPickerTitle', '#icon-picker-modal-title', uiCache);
 defineLazy(ui, 'colorPickerTitle', '#color-picker-modal-title', uiCache);
-defineLazy(ui, 'habitConscienceDisplay', '#habit-conscience-display', uiCache);
+defineLazy(ui, 'habitConscienceDisplay', '#habit-conscience-display', uiCache, true);
 defineLazy(ui, 'syncErrorMsg', '#sync-error-msg', uiCache);
-defineLazy(ui, 'syncDebugModal', '#sync-debug-modal', uiCache);
-defineLazy(ui, 'syncLogsList', '#sync-logs-list', uiCache);
 
+// --- CHART ELEMENTS SUB-OBJECT ---
 ui.chart = {} as UIElements['chart'];
 defineLazy(ui.chart, 'title', '#chart-container .chart-title', chartCache);
 defineLazy(ui.chart, 'subtitle', '#chart-container .app-subtitle', chartCache);
@@ -276,7 +304,7 @@ defineLazy(ui.chart, 'tooltipDate', '#chart-container .tooltip-date', chartCache
 defineLazy(ui.chart, 'tooltipScoreLabel', '#chart-container .tooltip-score-label', chartCache);
 defineLazy(ui.chart, 'tooltipScoreValue', '#chart-container .tooltip-score-value', chartCache);
 defineLazy(ui.chart, 'tooltipHabits', '#chart-container .tooltip-habits li', chartCache);
-defineLazy(ui, 'indicator', '#chart-container .chart-indicator', chartCache);
+defineLazy(ui.chart, 'indicator', '#chart-container .chart-indicator', chartCache);
 defineLazy(ui.chart, 'evolutionIndicator', '#chart-container .chart-evolution-indicator', chartCache);
 defineLazy(ui.chart, 'axisStart', '#chart-container .chart-axis-labels span:first-child', chartCache);
 defineLazy(ui.chart, 'axisEnd', '#chart-container .chart-axis-labels span:last-child', chartCache);

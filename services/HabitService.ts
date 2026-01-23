@@ -51,9 +51,6 @@ export class HabitService {
         
         // 5. Flag de Sujeira (Avisa Persistence e Charts que algo mudou)
         state.uiDirtyState.chartData = true;
-
-        // DEBUG: Confirmação visual no console (Remova após confirmar que funciona)
-        // console.log(`[Bitmask] Write Success: ${key} -> ${newLog} (Status: ${newState})`);
     }
 
     /**
@@ -92,11 +89,8 @@ export class HabitService {
     static unpackBinaryLogs(binaryMap: Map<string, ArrayBuffer>) {
         if (!state.monthlyLogs) state.monthlyLogs = new Map();
         binaryMap.forEach((buffer, key) => {
-            // Conversão simples de buffer antigo para BigInt (assumindo 64 bits ou similar)
-            // Implementação simplificada para migração
             try {
                 const view = new DataView(buffer);
-                // Se o buffer for pequeno, tentamos ler. Se não, descartamos (segurança).
                 if (buffer.byteLength >= 8) {
                     state.monthlyLogs!.set(key, view.getBigUint64(0, true)); // Little Endian
                 }
@@ -104,5 +98,59 @@ export class HabitService {
                 console.warn("Falha na migração binária legada", e);
             }
         });
+    }
+
+    /**
+     * INTELLIGENT MERGE (CRDT-Lite para Bitmasks)
+     * Funde dois mapas de logs.
+     * Regra Padrão: Timestamp Authority (definido no caller) + Soft Merge (não apaga dados se um lado for zero).
+     */
+    static mergeLogs(winnerMap: Map<string, bigint> | undefined, loserMap: Map<string, bigint> | undefined): Map<string, bigint> {
+        const result = new Map<string, bigint>(winnerMap || []);
+        if (!loserMap) return result;
+
+        for (const [key, loserVal] of loserMap.entries()) {
+            const winnerVal = result.get(key);
+            // Se o vencedor não tem dados ou tem dados vazios (0), aceita os dados do perdedor
+            if (winnerVal === undefined || (winnerVal === 0n && loserVal !== 0n)) {
+                result.set(key, loserVal);
+            }
+        }
+        return result;
+    }
+
+    /**
+     * FORCE DAY SYNC (Prioridade Absoluta para Data Específica)
+     * Transplanta os bits de um dia específico da 'sourceMap' (Cloud) para 'targetMap' (Local/Merged).
+     * Isso garante que "Hoje" esteja exatamente igual à nuvem, ignorando timestamps locais.
+     */
+    static overwriteDayBits(targetMap: Map<string, bigint>, sourceMap: Map<string, bigint> | undefined, dateISO: string) {
+        if (!sourceMap) return;
+        
+        // Itera sobre todos os hábitos na fonte (Nuvem) que têm registro para este mês
+        const monthSuffix = dateISO.substring(0, 7); // YYYY-MM
+        const day = parseInt(dateISO.substring(8, 10), 10);
+        
+        // Calcula a máscara do dia (todos os 3 períodos: Manhã, Tarde, Noite)
+        // Cada período usa 2 bits. Total 6 bits por dia.
+        // Posição inicial: (dia - 1) * 6
+        const startBit = BigInt((day - 1) * 6);
+        const dayMask = (3n << startBit) | (3n << (startBit + 2n)) | (3n << (startBit + 4n));
+        const clearMask = ~dayMask;
+
+        for (const [key, sourceVal] of sourceMap.entries()) {
+            if (key.endsWith(monthSuffix)) {
+                // Extrai os bits do dia da nuvem
+                const sourceDayBits = sourceVal & dayMask;
+                
+                // Pega o valor atual local (ou 0 se não existir)
+                const currentLocalVal = targetMap.get(key) || 0n;
+                
+                // Limpa os bits do dia no local e injeta os bits da nuvem
+                const newVal = (currentLocalVal & clearMask) | sourceDayBits;
+                
+                targetMap.set(key, newVal);
+            }
+        }
     }
 }

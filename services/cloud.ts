@@ -2,7 +2,6 @@
 /**
  * @license
  * SPDX-License-Identifier: Apache-2.0
- * VERSÃO: V18.7 - With Telemetry Logging
  */
 
 import { AppState, state, getPersistableState } from '../state';
@@ -15,18 +14,8 @@ import { mergeStates } from './dataMerge';
 import { compressToBuffer, decompressFromBuffer, decompressString } from '../utils';
 
 const DEBOUNCE_DELAY = 2000;
-const MAX_LOG_SIZE = 50; // Keep logs clean
 let syncTimeout: any = null;
 let isSyncInProgress = false;
-
-// --- TELEMETRY LOGGING ---
-
-function addSyncLog(msg: string, type: 'info' | 'error' | 'success' = 'info') {
-    state.syncLogs.unshift({ time: Date.now(), msg, type });
-    if (state.syncLogs.length > MAX_LOG_SIZE) state.syncLogs.pop();
-    // Non-blocking notification for UI to potentially refresh logs if open
-    document.dispatchEvent(new CustomEvent('sync-logs-updated'));
-}
 
 // --- SERIALIZATION ENGINE ---
 
@@ -71,30 +60,47 @@ const TASKS: Record<string, (payload: any) => Promise<any> | any> = {
     'archive': async (payload: any) => {
         const result: Record<string, Uint8Array> = {};
         const years = Object.keys(payload);
+
         for (const year of years) {
             const { additions, base } = payload[year];
             let baseObj = {};
+
             if (base) {
                 if (typeof base === 'object' && !(base instanceof Uint8Array)) {
-                    baseObj = base;
+                    baseObj = base; 
                 } else {
                     try {
                         let jsonStr = '';
-                        if (base instanceof Uint8Array) jsonStr = await decompressFromBuffer(base);
-                        else if (typeof base === 'string') jsonStr = base.startsWith('GZIP:') ? await decompressString(base.substring(5)) : base;
+                        if (base instanceof Uint8Array) {
+                            jsonStr = await decompressFromBuffer(base);
+                        } else if (typeof base === 'string') {
+                            jsonStr = base.startsWith('GZIP:') 
+                                ? await decompressString(base.substring(5))
+                                : base;
+                        }
                         baseObj = JSON.parse(jsonStr);
-                    } catch (e) { baseObj = {}; }
+                    } catch (e) {
+                        console.warn(`[Cloud] Archive corruption for ${year}, resetting base.`, e);
+                        baseObj = {};
+                    }
                 }
             }
+
             const merged = { ...baseObj, ...additions };
+
             try {
                 const compressed = await compressToBuffer(JSON.stringify(merged));
                 result[year] = compressed;
-            } catch (e) { throw e; }
+            } catch (e) {
+                console.error(`[Cloud] Compression failed for ${year}`, e);
+                throw e;
+            }
         }
         return result;
     },
-    'prune-habit': (payload: any) => payload.archives
+    'prune-habit': (payload: any) => {
+        return payload.archives;
+    }
 };
 
 export function runWorkerTask<T>(type: string, payload: any): Promise<T> {
@@ -106,38 +112,100 @@ export function runWorkerTask<T>(type: string, payload: any): Promise<T> {
                 if (!handler) throw new Error(`Unknown task: ${type}`);
                 const result = await handler(payload);
                 resolve(result);
-            } catch (e) { reject(e); }
+            } catch (e) {
+                reject(e);
+            }
         };
-        if (scheduler?.postTask) scheduler.postTask(runner, { priority: 'background' });
-        else setTimeout(runner, 0);
+
+        if (scheduler?.postTask) {
+            scheduler.postTask(runner, { priority: 'background' });
+        } else {
+            setTimeout(runner, 0);
+        }
     });
 }
+
+export function prewarmWorker() {}
 
 // --- SYNC STATUS UI ---
 
 export function setSyncStatus(statusKey: 'syncSaving' | 'syncSynced' | 'syncError' | 'syncInitial' | 'syncing') {
     state.syncState = statusKey === 'syncing' ? 'syncSaving' : statusKey;
     const displayKey = statusKey === 'syncing' ? 'syncSaving' : statusKey;
-    if (ui.syncStatus) ui.syncStatus.textContent = t(displayKey);
+    
+    if (ui.syncStatus) {
+        ui.syncStatus.textContent = t(displayKey);
+        // Visual cue that it's clickable
+        ui.syncStatus.style.cursor = 'pointer';
+        ui.syncStatus.style.textDecoration = 'underline dotted';
+    }
+    
+    if (statusKey === 'syncError' && ui.syncErrorMsg) {
+        ui.syncErrorMsg.textContent = state.syncLastError || t('syncError');
+        ui.syncErrorMsg.classList.remove('hidden');
+    } else if (ui.syncErrorMsg) {
+        ui.syncErrorMsg.classList.add('hidden');
+    }
+}
+
+// --- DIAGNOSTICS ---
+
+export async function diagnoseConnection(): Promise<string> {
+    const report: string[] = [];
+    report.push(`--- DIAGNÓSTICO DE REDE ---`);
+    report.push(`Data: ${new Date().toISOString()}`);
+    report.push(`Online (Nav): ${navigator.onLine}`);
+    
+    const key = getSyncKey();
+    report.push(`Chave Local: ${key ? (key.substring(0,4) + '...') : 'NENHUMA'}`);
+    
+    if (!key) return report.join('\n');
+
+    try {
+        const start = performance.now();
+        // Tenta um fetch simples
+        const res = await apiFetch('/api/sync', { method: 'GET' }, true);
+        const time = (performance.now() - start).toFixed(0);
+        
+        report.push(`Ping API: ${time}ms`);
+        report.push(`HTTP Status: ${res.status} ${res.statusText}`);
+        
+        const text = await res.text();
+        report.push(`Response Body (Sample): ${text.substring(0, 100)}`);
+        
+        if (!res.ok) {
+            report.push(`❌ ERRO: O servidor rejeitou a conexão.`);
+        } else {
+            report.push(`✅ SUCESSO: Conexão estabelecida.`);
+        }
+    } catch (e: any) {
+        report.push(`❌ ERRO DE REDE:`);
+        report.push(`${e.message}`);
+        if (e.cause) report.push(`Causa: ${e.cause}`);
+    }
+    
+    return report.join('\n');
 }
 
 // --- CLOUD SYNC CORE ---
 
 export async function downloadRemoteState(key: string): Promise<AppState | null> {
     try {
-        addSyncLog("Iniciando descarga de dados...", "info");
         const res = await apiFetch('/api/sync', { method: 'GET' }, true);
-        if (res.status === 404) { addSyncLog("Nenhum dado encontrado na nuvem.", "info"); return null; }
+        
+        if (res.status === 404) return null;
         if (res.status === 401) throw new Error("Chave Inválida (401)");
         if (!res.ok) throw new Error(`Erro HTTP ${res.status}`);
+
         const data = await res.json();
         if (!data || !data.state) return null;
-        addSyncLog(`Dados recebidos (${Math.round(data.state.length / 1024)}KB). Iniciando decriptografia...`);
+
         const jsonString = await decrypt(data.state, key);
-        addSyncLog("Dados descriptografados e descompressos com sucesso.", "success");
         return JSON.parse(jsonString, _jsonReviver);
+
     } catch (e: any) {
-        addSyncLog(`Falha na descarga: ${e.message}`, "error");
+        console.error("Download/Decrypt Failed:", e);
+        state.syncLastError = `Download: ${e.message}`;
         throw e;
     }
 }
@@ -146,21 +214,36 @@ export async function fetchStateFromCloud(): Promise<AppState | null> {
     if (!hasLocalSyncKey()) return null;
     const key = getSyncKey();
     if (!key) return null;
+
+    if (!navigator.onLine) return null;
+
     try {
         setSyncStatus('syncing');
+        
         const remoteState = await downloadRemoteState(key);
-        if (!remoteState) { setSyncStatus('syncSynced'); return null; }
+        
+        if (!remoteState) {
+            setSyncStatus('syncSynced');
+            return null;
+        }
+
         const localState = getPersistableState();
-        if (!localState.monthlyLogs && state.monthlyLogs) localState.monthlyLogs = state.monthlyLogs;
-        addSyncLog("Executando fusão inteligente de dados (Smart Merge)...");
+        if (!localState.monthlyLogs && state.monthlyLogs) {
+            localState.monthlyLogs = state.monthlyLogs;
+        }
+
         const mergedState = await mergeStates(localState, remoteState);
+
         Object.assign(state, mergedState);
-        await persistStateLocally(mergedState);
+        await persistStateLocally(mergedState, true);
+        
         document.dispatchEvent(new CustomEvent('render-app'));
         setSyncStatus('syncSynced');
-        addSyncLog("Estado local atualizado com sucesso.", "success");
+        
         return mergedState;
+
     } catch (e: any) {
+        console.error("Cloud Pull Failed:", e);
         state.syncLastError = e.message;
         setSyncStatus('syncError');
         return null;
@@ -170,41 +253,65 @@ export async function fetchStateFromCloud(): Promise<AppState | null> {
 async function _performSync() {
     const key = getSyncKey();
     if (!key) return;
+
+    if (!navigator.onLine) return;
+
     try {
         isSyncInProgress = true;
         setSyncStatus('syncing');
-        addSyncLog("Preparando dados para envio...");
+
         const rawState = getPersistableState();
         rawState.monthlyLogs = state.monthlyLogs;
+
         const jsonString = JSON.stringify(rawState, _jsonReplacer);
-        addSyncLog(`Serialização completa (${Math.round(jsonString.length/1024)}KB). Criptografando...`);
         const encryptedData = await encrypt(jsonString, key);
-        addSyncLog(`Criptografia finalizada. Enviando payload (${Math.round(encryptedData.length/1024)}KB)...`);
-        const res = await apiFetch('/api/sync', { method: 'POST', body: JSON.stringify({ lastModified: Date.now(), state: encryptedData }) }, true);
+
+        const payload = {
+            lastModified: rawState.lastModified, 
+            state: encryptedData
+        };
+
+        const res = await apiFetch('/api/sync', {
+            method: 'POST',
+            body: JSON.stringify(payload)
+        }, true);
+
         if (res.status === 409) {
-            addSyncLog("Conflito detectado (409). Baixando versão mais recente para merge...", "info");
+            console.warn("[Cloud] Conflict (409). Server has newer data. Initiating Auto-Merge...");
             await fetchStateFromCloud(); 
+            syncStateWithCloud();
+
+        } else if (res.status === 413) {
+            console.error("[Cloud] Payload Too Large (413).");
+            throw new Error("Dados muito grandes (Limite 1MB).");
+        } else if (res.status === 401) {
+            console.error("[Cloud] Unauthorized (401).");
+            throw new Error("Não autorizado (401).");
         } else if (!res.ok) {
             throw new Error(`Erro Servidor: ${res.status}`);
         } else {
             setSyncStatus('syncSynced');
             state.syncLastError = null;
-            addSyncLog("Sincronização na nuvem concluída com sucesso.", "success");
         }
+
     } catch (e: any) {
+        console.error("Sync Push Failed:", e);
         state.syncLastError = e.message || "Erro de Conexão";
         setSyncStatus('syncError');
-        addSyncLog(`Falha no envio: ${state.syncLastError}`, "error");
-    } finally { isSyncInProgress = false; }
+    } finally {
+        isSyncInProgress = false;
+    }
 }
 
 export function syncStateWithCloud(currentState?: AppState, immediate = false) {
     if (!hasLocalSyncKey()) return;
+    
     if (syncTimeout) clearTimeout(syncTimeout);
-    if (immediate) _performSync();
-    else syncTimeout = setTimeout(() => _performSync(), DEBOUNCE_DELAY);
-}
-
-if (hasLocalSyncKey()) {
-    setTimeout(fetchStateFromCloud, 1500);
+    
+    if (immediate) {
+        console.log("[Cloud] Immediate sync trigger.");
+        _performSync();
+    } else {
+        syncTimeout = setTimeout(() => _performSync(), DEBOUNCE_DELAY);
+    }
 }

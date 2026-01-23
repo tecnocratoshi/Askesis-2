@@ -1,3 +1,4 @@
+
 /**
  * @license
  * SPDX-License-Identifier: Apache-2.0
@@ -92,15 +93,28 @@ function pruneOrphanedDailyData(habits: readonly Habit[], dailyData: Record<stri
     }
 }
 
-async function saveStateInternal(immediate = false) {
+// Internal save with suppression support
+async function saveStateInternal(immediate = false, suppressSync = false) {
     const structuredData = getPersistableState();
     try {
         await saveSplitState(structuredData, state.monthlyLogs);
     } catch (e) { 
         console.error("IDB Save Failed:", e); 
     }
-    // Pass the immediate flag to the sync handler (cloud.ts)
-    syncHandler?.(structuredData, immediate);
+    
+    // LOOP PROTECTION: Only trigger sync if NOT suppressed
+    if (!suppressSync) {
+        syncHandler?.(structuredData, immediate);
+    } else {
+        console.log("[Persistence] Sync suppressed for this save.");
+    }
+}
+
+export function cancelPendingSave() {
+    if (saveTimeout !== undefined) {
+        clearTimeout(saveTimeout);
+        saveTimeout = undefined;
+    }
 }
 
 export async function flushSaveBuffer(): Promise<void> {
@@ -112,13 +126,14 @@ export async function flushSaveBuffer(): Promise<void> {
     }
 }
 
-export async function saveState(): Promise<void> {
+export async function saveState(suppressSync = false): Promise<void> {
     if (saveTimeout) clearTimeout(saveTimeout);
-    saveTimeout = self.setTimeout(saveStateInternal, IDB_SAVE_DEBOUNCE_MS);
+    // Bind the suppressSync flag to the timeout callback
+    saveTimeout = self.setTimeout(() => saveStateInternal(false, suppressSync), IDB_SAVE_DEBOUNCE_MS);
 }
 
-export const persistStateLocally = (data: AppState) => {
-    return saveSplitState(data, data.monthlyLogs || state.monthlyLogs);
+export const persistStateLocally = (data: AppState, suppressSync = false) => {
+    return saveStateInternal(true, suppressSync);
 };
 
 export async function loadState(cloudState?: AppState): Promise<AppState | null> {
@@ -206,16 +221,35 @@ export async function loadState(cloudState?: AppState): Promise<AppState | null>
     return null;
 }
 
-export const clearLocalPersistence = () => Promise.all([
-    performIDB('readwrite', s => {
-        s.delete(STATE_JSON_KEY);
-        s.delete(STATE_BINARY_KEY);
-        s.delete(LEGACY_STORAGE_KEY);
-        return {} as any; 
-    }), 
-    localStorage.removeItem(LEGACY_STORAGE_KEY),
-    (state.monthlyLogs = new Map())
-]);
+export const clearLocalPersistence = async () => {
+    // SECURITY: Cancela qualquer salvamento pendente (debounce) para evitar que ele reescreva dados
+    // logo após o comando de delete.
+    cancelPendingSave();
+    
+    // TRANSACTIONAL INTEGRITY:
+    // Em vez de usar performIDB (que resolve no onsuccess), criamos uma transação manual
+    // que só resolve no 'oncomplete'. Isso garante que o commit no disco ocorreu
+    // antes de prosseguirmos para o reload da página.
+    try {
+        const db = await getDB();
+        await new Promise<void>((resolve, reject) => {
+            const tx = db.transaction(STORE_NAME, 'readwrite');
+            const store = tx.objectStore(STORE_NAME);
+            
+            store.delete(STATE_JSON_KEY);
+            store.delete(STATE_BINARY_KEY);
+            store.delete(LEGACY_STORAGE_KEY);
+            
+            tx.oncomplete = () => resolve();
+            tx.onerror = () => reject(tx.error);
+        });
+    } catch (e) {
+        console.warn("IDB clear failed or empty", e);
+    }
+
+    localStorage.removeItem(LEGACY_STORAGE_KEY);
+    state.monthlyLogs = new Map();
+};
 
 if (typeof window !== 'undefined') {
     // TRIGGER: Flush sync queue on close/hide
