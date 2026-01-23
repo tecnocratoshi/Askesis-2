@@ -58,28 +58,25 @@ async function _processKey(key: string) {
     
     try {
         storeKey(key);
-        // --- FIX: _refreshViewState does not accept arguments ---
         _refreshViewState(); 
         
-        // --- FIX: downloadRemoteState (alias for fetchStateFromCloud) does not accept arguments ---
         const cloudState = await downloadRemoteState();
 
         if (cloudState) {
             const localState = getPersistableState();
-            if (!localState.monthlyLogs && state.monthlyLogs) {
-                localState.monthlyLogs = state.monthlyLogs;
-            }
 
+            // SMART MERGE & HYDRATION
             const mergedState = await mergeStates(localState, cloudState);
             Object.assign(state, mergedState);
             
-            // CACHE INVALIDATION [2025-06-05]: Force DOM to redraw new habits and calendar rings
+            // CACHE INVALIDATION: Force UI Rebuild
             state.uiDirtyState.habitListStructure = true;
             state.uiDirtyState.calendarVisuals = true;
             state.uiDirtyState.chartData = true;
 
-            await saveState();
+            await saveState(true); // Suppress sync to avoid loop
             renderApp();
+            
             setSyncStatus('syncSynced');
             syncStateWithCloud(mergedState, true);
         } else {
@@ -203,8 +200,6 @@ const _handleDisableSync = () => {
 };
 
 const _handleDiagnostics = (e: Event) => {
-    // BRAVE FIX: Using pointerdown prevents Shield-related touch target issues.
-    // Also, we now open the high-fidelity debug modal.
     openSyncDebugModal();
 };
 
@@ -231,7 +226,6 @@ export function initSync() {
     if (ui.viewKeyBtn) ui.viewKeyBtn.addEventListener('click', _handleViewKey);
     if (ui.disableSyncBtn) ui.disableSyncBtn.addEventListener('click', _handleDisableSync);
     
-    // BRAVE FIX: pointerdown for better touch/click reliability with blockers
     if (ui.syncStatus) ui.syncStatus.addEventListener('pointerdown', _handleDiagnostics);
 
     _refreshViewState();

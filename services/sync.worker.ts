@@ -8,6 +8,24 @@
 const SALT_LEN = 16;
 const IV_LEN = 12;
 
+/**
+ * Protocolo de Serialização (JSON Bridge):
+ * Suporta tipos não primitivos no Worker (BigInt, Map).
+ */
+function jsonReplacer(key: string, value: any) {
+    if (typeof value === 'bigint') return { __type: 'bigint', val: value.toString() };
+    if (value instanceof Map) return { __type: 'map', val: Array.from(value.entries()) };
+    return value;
+}
+
+function jsonReviver(key: string, value: any) {
+    if (value && typeof value === 'object') {
+        if (value.__type === 'bigint') return BigInt(value.val);
+        if (value.__type === 'map') return new Map(value.val);
+    }
+    return value;
+}
+
 async function deriveKey(password: string, salt: Uint8Array): Promise<CryptoKey> {
     const enc = new TextEncoder();
     const keyMaterial = await crypto.subtle.importKey("raw", enc.encode(password), { name: "PBKDF2" }, false, ["deriveKey"]);
@@ -18,12 +36,8 @@ async function deriveKey(password: string, salt: Uint8Array): Promise<CryptoKey>
 }
 
 async function encrypt(payload: any, password: string): Promise<string> {
-    // PERFORMANCE FIX: Serialização ocorre no Worker agora.
-    // O replacer lida com BigInt preservando o formato esperado pelo Askesis.
-    const text = JSON.stringify(payload, (key, value) => {
-        if (typeof value === 'bigint') return { __type: 'bigint', val: value.toString() };
-        return value;
-    });
+    // A serialização ocorre no Worker para não bloquear a Main Thread
+    const text = JSON.stringify(payload, jsonReplacer);
 
     const salt = crypto.getRandomValues(new Uint8Array(SALT_LEN));
     const iv = crypto.getRandomValues(new Uint8Array(IV_LEN));
@@ -46,10 +60,8 @@ async function decrypt(encryptedBase64: string, password: string): Promise<any> 
     const key = await deriveKey(password, salt);
     const decrypted = await crypto.subtle.decrypt({ name: "AES-GCM", iv }, key, data);
     
-    // O parsing também ocorre no Worker. 
-    // Nota: O reviver de BigInt não é estritamente necessário aqui se o caller
-    // na Main Thread usar o HabitService.deserializeLogsFromCloud que já lida com Map/BigInt.
-    return JSON.parse(new TextDecoder().decode(decrypted));
+    // Hidratação completa preservando BigInt e Map
+    return JSON.parse(new TextDecoder().decode(decrypted), jsonReviver);
 }
 
 // --- MESSAGE HANDLER ---

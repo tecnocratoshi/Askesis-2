@@ -14,10 +14,27 @@ import { HabitService } from './HabitService';
 import { getTodayUTCIso } from '../utils';
 
 /**
+ * Hidrata monthlyLogs se vieram como Array bruto (do JSON sem reviver).
+ */
+function hydrateLogs(state: AppState) {
+    if (state.monthlyLogs && !(state.monthlyLogs instanceof Map)) {
+        const entries = Array.isArray(state.monthlyLogs) 
+            ? state.monthlyLogs 
+            : Object.entries(state.monthlyLogs);
+            
+        const map = new Map<string, bigint>();
+        entries.forEach(([key, val]: [string, any]) => {
+            try {
+                // Suporta BigInt literal ou string hex "0x..."
+                map.set(key, typeof val === 'bigint' ? val : BigInt(val));
+            } catch(e) {}
+        });
+        state.monthlyLogs = map;
+    }
+}
+
+/**
  * Mescla registros diários.
- * @param source O registro "dominante" (normalmente Cloud para hoje, ou Vencedor por Timestamp).
- * @param target O registro a ser atualizado.
- * @param preserveNotes Se true, tenta manter notas do target se source estiver vazio.
  */
 function mergeDayRecord(source: Record<string, HabitDailyInfo>, target: Record<string, HabitDailyInfo>, preserveNotes = true) {
     for (const habitId in source) {
@@ -27,14 +44,11 @@ function mergeDayRecord(source: Record<string, HabitDailyInfo>, target: Record<s
         }
 
         const sourceHabitData = source[habitId];
-        const targetHabitData = target[habitId]; // Objeto que será modificado (Merged)
+        const targetHabitData = target[habitId];
 
         const sourceInstances = sourceHabitData.instances || {};
         const targetInstances = targetHabitData.instances || {};
 
-        // Para HOJE (prioridade Cloud), começamos com a estrutura da Cloud.
-        // Se for mesclagem histórica normal, a lógica de 'weights' abaixo resolve.
-        
         for (const time in sourceInstances) {
             const srcInst = sourceInstances[time as any];
             const tgtInst = targetInstances[time as any];
@@ -44,23 +58,18 @@ function mergeDayRecord(source: Record<string, HabitDailyInfo>, target: Record<s
             if (!tgtInst) {
                 targetInstances[time as any] = srcInst;
             } else {
-                // WEIGHTED MERGE: Notes
-                // Se a fonte (Cloud) não tem nota, mas o alvo (Local) tem, mantemos a Local.
-                // Se ambas têm, e a Local é maior, mantemos a Local (assumindo edição recente não syncada).
                 if (preserveNotes) {
                     const sNoteLen = srcInst.note ? srcInst.note.length : 0;
                     const tNoteLen = tgtInst.note ? tgtInst.note.length : 0;
                     
                     if ((!srcInst.note && tgtInst.note) || (tgtInst.note && tNoteLen > sNoteLen)) {
-                        srcInst.note = tgtInst.note; // Injeta nota local no objeto fonte
+                        srcInst.note = tgtInst.note;
                     }
                 }
-                // O objeto final é baseado no source (Cloud), com a nota enriquecida.
                 targetInstances[time as any] = srcInst;
             }
         }
         
-        // Se o source (Cloud) tem agendamento específico, ele ganha.
         if (sourceHabitData.dailySchedule) {
              targetHabitData.dailySchedule = sourceHabitData.dailySchedule;
         }
@@ -68,18 +77,21 @@ function mergeDayRecord(source: Record<string, HabitDailyInfo>, target: Record<s
 }
 
 export async function mergeStates(local: AppState, incoming: AppState): Promise<AppState> {
+    // Sanitização de Tipos (Anti-Crash)
+    hydrateLogs(local);
+    hydrateLogs(incoming);
+
     const localTs = local.lastModified || 0;
     const incomingTs = incoming.lastModified || 0;
     const todayISO = getTodayUTCIso();
     
     // 1. Define Base (Vencedor) por Timestamp
-    // incoming = Nuvem
     let winner = localTs > incomingTs ? local : incoming;
     let loser = localTs > incomingTs ? incoming : local;
     
     const merged: AppState = structuredClone(winner);
     
-    // 2. Habits Union (Prevent Duplicates by ID)
+    // 2. Habits Union
     const mergedIds = new Set(merged.habits.map(h => h.id));
     loser.habits.forEach(h => {
         if (!mergedIds.has(h.id)) {
@@ -87,29 +99,22 @@ export async function mergeStates(local: AppState, incoming: AppState): Promise<
         }
     });
 
-    // 3. Daily Data Merge (Rich Data)
+    // 3. Daily Data Merge
     for (const date in loser.dailyData) {
         if (!merged.dailyData[date]) {
             (merged.dailyData as any)[date] = loser.dailyData[date];
         } else {
-            // Para dias passados, usamos a lógica padrão de merge baseada no Vencedor
             if (date !== todayISO) {
                 mergeDayRecord(loser.dailyData[date], (merged.dailyData as any)[date]);
             }
         }
     }
 
-    // --- PRIORIDADE ABSOLUTA PARA HOJE (Cloud Wins) ---
-    // Independentemente de quem é o 'winner' por timestamp, para HOJE,
-    // queremos que a estrutura da Nuvem (incoming) seja a base, 
-    // mas preservando notas locais se elas forem mais detalhadas.
+    // PRIORIDADE ABSOLUTA PARA HOJE (Cloud Wins)
     if (incoming.dailyData[todayISO]) {
         if (!merged.dailyData[todayISO]) {
             (merged.dailyData as any)[todayISO] = {};
         }
-        // Aqui invertemos a lógica: 'source' é incoming (Cloud), 'target' é o merged (que pode ter dados locais).
-        // TYPE FIX: Cast explícito para 'any' ou 'Record' mutável para satisfazer o compilador TS,
-        // já que merged.dailyData é tipado como Readonly no AppState.
         mergeDayRecord(incoming.dailyData[todayISO], (merged.dailyData as any)[todayISO], true);
     }
 
@@ -123,26 +128,24 @@ export async function mergeStates(local: AppState, incoming: AppState): Promise<
         }
     }
     
-    // 5. Monthly Logs (Bitmasks) - SMART MERGE
+    // 5. Monthly Logs (Bitmasks)
     merged.monthlyLogs = HabitService.mergeLogs(winner.monthlyLogs, loser.monthlyLogs);
     
-    // --- FORCE TODAY BITMASK FROM CLOUD ---
-    // Sobrescreve especificamente os bits de hoje com o que está na nuvem.
+    // FORCE TODAY BITMASK FROM CLOUD
     if (incoming.monthlyLogs) {
         HabitService.overwriteDayBits(merged.monthlyLogs, incoming.monthlyLogs, todayISO);
     }
 
-    // 6. Time Integrity (Monotonic Clock)
+    // 6. Time Integrity
     const now = Date.now();
     merged.lastModified = Math.max(localTs, incomingTs, now);
-    
     if (merged.lastModified === Math.max(localTs, incomingTs)) {
         merged.lastModified += 1;
     }
 
+    // Meta Data Merge
     // @ts-ignore
     merged.version = Math.max(local.version || 0, incoming.version || 0);
-    
     const mergeList = (a: readonly any[] | undefined, b: readonly any[] | undefined) => 
         Array.from(new Set([...(a||[]), ...(b||[])]));
 

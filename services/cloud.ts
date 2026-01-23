@@ -15,9 +15,8 @@ import { pushToOneSignal, generateUUID } from '../utils';
 import { ui } from '../render/ui';
 import { t } from '../i18n';
 import { hasLocalSyncKey, getSyncKey, apiFetch } from './api';
-import { renderApp, updateNotificationUI } from '../render';
+import { renderApp } from '../render';
 import { mergeStates } from './dataMerge';
-import { HabitService } from './HabitService';
 
 // PERFORMANCE: Debounce para evitar salvar na nuvem a cada pequena alteração
 let syncTimeout: number | null = null;
@@ -27,9 +26,6 @@ let isSyncInProgress = false;
 let pendingSyncState: AppState | null = null;
 
 // --- TELEMETRY ---
-/**
- * Adiciona um log estruturado ao sistema de telemetria.
- */
 export function addSyncLog(msg: string, type: 'success' | 'error' | 'info' = 'info', icon?: string) {
     if (!state.syncLogs) state.syncLogs = [];
     state.syncLogs.push({ time: Date.now(), msg, type, icon });
@@ -81,7 +77,6 @@ async function resolveConflictWithServerState(serverPayload: ServerPayload) {
     if (!syncKey) return setSyncStatus('syncError');
     
     try {
-        // Descriptografia ocorre no Worker (recebe string, devolve objeto via JSON.parse interno do worker)
         const serverState = await runWorkerTask<AppState>('decrypt', serverPayload.state, syncKey);
         const localState = getPersistableState();
         const mergedState = await mergeStates(localState, serverState);
@@ -89,6 +84,11 @@ async function resolveConflictWithServerState(serverPayload: ServerPayload) {
         await persistStateLocally(mergedState, true); 
         await loadState(mergedState);
         
+        // CACHE INVALIDATION: Force Re-render
+        state.uiDirtyState.habitListStructure = true;
+        state.uiDirtyState.calendarVisuals = true;
+        state.uiDirtyState.chartData = true;
+
         renderApp();
         setSyncStatus('syncSynced');
         addSyncLog("Fusão concluída e sincronizada.", "success", "✅");
@@ -111,17 +111,10 @@ async function performSync() {
     try {
         addSyncLog("Preparando payload (POJO Bridge)...", "info", "🔒");
         
-        // PERFORMANCE FIX: Em vez de JSON.stringify na Main Thread (bloqueante),
-        // criamos um objeto compatível com Structured Clone.
-        // BigInt é suportado nativamente, mas Map precisa virar Array.
-        const cloneableState = { 
-            ...appState, 
-            monthlyLogs: Array.from(state.monthlyLogs.entries()) 
-        };
-
-        // O Worker agora recebe o objeto bruto e faz a serialização lá (Non-blocking).
-        const encryptedState = await runWorkerTask<string>('encrypt', cloneableState, syncKey);
+        // Structured Clone handles BigInt, but we need to ensure Map is hydrated/compatible
+        const cloneableState = { ...appState };
         
+        const encryptedState = await runWorkerTask<string>('encrypt', cloneableState, syncKey);
         const payload: ServerPayload = { lastModified: appState.lastModified, state: encryptedState };
         
         addSyncLog(`Upload iniciado (${(encryptedState.length / 1024).toFixed(1)}KB)...`, "info", "⬆️");
@@ -184,5 +177,4 @@ export async function fetchStateFromCloud(): Promise<AppState | undefined> {
     }
 }
 
-// --- FIX: Export alias for downloadRemoteState used in sync listeners ---
 export { fetchStateFromCloud as downloadRemoteState };
