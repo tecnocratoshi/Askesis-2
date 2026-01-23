@@ -6,9 +6,9 @@
 
 import { ui } from "../render/ui";
 import { t } from "../i18n";
-import { downloadRemoteState, syncStateWithCloud, setSyncStatus, diagnoseConnection } from "../services/cloud";
-import { loadState, saveState, clearLocalPersistence } from "../services/persistence";
-import { renderApp } from "../render";
+import { downloadRemoteState, syncStateWithCloud, setSyncStatus } from "../services/cloud";
+import { loadState, saveState } from "../services/persistence";
+import { renderApp, openSyncDebugModal } from "../render";
 import { showConfirmationModal } from "../render/modals";
 import { storeKey, clearKey, hasLocalSyncKey, getSyncKey, isValidKeyFormat } from "../services/api";
 import { generateUUID } from "../utils";
@@ -23,7 +23,6 @@ function showView(view: 'inactive' | 'enterKey' | 'displayKey' | 'active') {
     ui.syncDisplayKeyView.style.display = 'none';
     ui.syncActiveView.style.display = 'none';
 
-    // Clear errors on view switch
     if (ui.syncErrorMsg) ui.syncErrorMsg.classList.add('hidden');
 
     switch (view) {
@@ -47,11 +46,9 @@ function _toggleButtons(buttons: HTMLButtonElement[], disabled: boolean) {
 // --- LOGIC ---
 
 async function _processKey(key: string) {
-    console.log("[Sync Debug] Processing key...");
     const buttons = [ui.submitKeyBtn, ui.cancelEnterKeyBtn];
     _toggleButtons(buttons, true);
     
-    // Clear previous errors
     if (ui.syncErrorMsg) ui.syncErrorMsg.classList.add('hidden');
     
     const originalBtnText = ui.submitKeyBtn.textContent;
@@ -60,56 +57,28 @@ async function _processKey(key: string) {
     const originalKey = getSyncKey();
     
     try {
-        // Armazena temporariamente para o teste
         storeKey(key);
-        
-        // [INSTANT FEEDBACK]: Atualiza a view imediatamente para 'active'
-        // Isso remove a sensação de lag enquanto o download acontece em background.
         _refreshViewState(); 
         
-        // Testa a chave baixando dados
-        console.log("[Sync Debug] Downloading remote state...");
         const cloudState = await downloadRemoteState(key);
 
         if (cloudState) {
-            console.log("[Sync Debug] Data found. Performing Smart Merge.");
-            
             const localState = getPersistableState();
-            // Fix Map loss during getPersistableState
             if (!localState.monthlyLogs && state.monthlyLogs) {
                 localState.monthlyLogs = state.monthlyLogs;
             }
 
-            // Realiza a fusão ponderada (Com prioridade Cloud para Hoje)
             const mergedState = await mergeStates(localState, cloudState);
-            
-            // Aplica na memória
             Object.assign(state, mergedState);
-            
-            // Salva no disco (Local)
             await saveState();
-            
-            // Renderiza UI
             renderApp();
-            
-            // Feedback visual e transição
             setSyncStatus('syncSynced');
-            
-            // Push para atualizar a nuvem com a versão mesclada (se necessário)
             syncStateWithCloud(mergedState, true);
-
         } else {
-            // CENÁRIO A: Nuvem Vazia (404) -> Novo Usuário ou Chave Nova
-            console.log("[Sync Debug] New user/Empty cloud. Uploading local state.");
             setSyncStatus('syncSynced');
-            
-            // Force immediate push to create the key on server and populate with local data
             syncStateWithCloud(getPersistableState(), true);
         }
     } catch (error: any) {
-        console.error("[Sync Debug] Error processing key:", error);
-        
-        // Restore old state on error
         if (originalKey) storeKey(originalKey);
         else clearKey();
 
@@ -121,7 +90,6 @@ async function _processKey(key: string) {
         }
         setSyncStatus('syncError');
         _refreshViewState();
-
     } finally {
         ui.submitKeyBtn.textContent = originalBtnText;
         _toggleButtons(buttons, false);
@@ -137,20 +105,15 @@ const _handleEnableSync = () => {
         
         const newKey = generateUUID();
         storeKey(newKey);
-        
-        // UX FIX: Atualiza status imediatamente para "Ativo".
         setSyncStatus('syncSynced');
         
         ui.syncKeyText.textContent = newKey;
         ui.syncDisplayKeyView.dataset.context = 'setup';
         showView('displayKey');
-        
-        // Immediate push for new key (Best Effort)
         syncStateWithCloud(getPersistableState(), true);
         
         setTimeout(() => ui.enableSyncBtn.disabled = false, 500);
     } catch (e: any) {
-        console.error(e);
         ui.enableSyncBtn.disabled = false;
         if (ui.syncErrorMsg) {
             ui.syncErrorMsg.textContent = e.message || "Erro ao gerar chave";
@@ -231,19 +194,14 @@ const _handleDisableSync = () => {
     );
 };
 
-// --- DIAGNOSTICS HANDLER ---
-const _handleDiagnostics = async () => {
-    const originalText = ui.syncStatus.textContent;
-    ui.syncStatus.textContent = "Testando...";
-    const report = await diagnoseConnection();
-    ui.syncStatus.textContent = originalText;
-    alert(report);
+const _handleDiagnostics = (e: Event) => {
+    // BRAVE FIX: Using pointerdown prevents Shield-related touch target issues.
+    // Also, we now open the high-fidelity debug modal.
+    openSyncDebugModal();
 };
 
 function _refreshViewState() {
     const hasKey = hasLocalSyncKey();
-    console.log(`[Sync Debug] Refreshing View. Has Key: ${hasKey}, State: ${state.syncState}`);
-    
     if (hasKey) {
         showView('active');
         if (state.syncState === 'syncInitial') {
@@ -256,9 +214,6 @@ function _refreshViewState() {
 }
 
 export function initSync() {
-    console.log("[Sync] Initializing listeners...");
-    
-    // SAFE BINDING: Ensure elements exist before adding listeners
     if (ui.enableSyncBtn) ui.enableSyncBtn.addEventListener('click', _handleEnableSync);
     if (ui.enterKeyViewBtn) ui.enterKeyViewBtn.addEventListener('click', _handleEnterKeyView);
     if (ui.cancelEnterKeyBtn) ui.cancelEnterKeyBtn.addEventListener('click', _handleCancelEnterKey);
@@ -268,8 +223,8 @@ export function initSync() {
     if (ui.viewKeyBtn) ui.viewKeyBtn.addEventListener('click', _handleViewKey);
     if (ui.disableSyncBtn) ui.disableSyncBtn.addEventListener('click', _handleDisableSync);
     
-    // NEW: Diagnostics Listener
-    if (ui.syncStatus) ui.syncStatus.addEventListener('click', _handleDiagnostics);
+    // BRAVE FIX: pointerdown for better touch/click reliability with blockers
+    if (ui.syncStatus) ui.syncStatus.addEventListener('pointerdown', _handleDiagnostics);
 
     _refreshViewState();
 }

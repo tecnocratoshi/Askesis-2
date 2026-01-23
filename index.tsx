@@ -21,15 +21,14 @@ import './css/forms.css';
 import './css/modals.css';
 
 import { state, AppState } from './state';
-import { loadState, persistStateLocally, registerSyncHandler } from './services/persistence';
+import { loadState, persistStateLocally, registerSyncHandler, saveState } from './services/persistence';
 import { renderApp, initI18n, updateUIText } from './render';
 import { setupEventListeners } from './listeners';
-import { createDefaultHabit, handleDayTransition, performArchivalCheck } from './services/habitActions';
+import { handleDayTransition, performArchivalCheck } from './services/habitActions';
 import { initSync } from './listeners/sync';
 import { fetchStateFromCloud, syncStateWithCloud, setSyncStatus } from './services/cloud';
 import { hasLocalSyncKey, initAuth } from './services/api';
 import { updateAppBadge } from './services/badge';
-import { mergeStates } from './services/dataMerge';
 import { setupMidnightLoop } from './utils';
 
 // --- AUTO-HEALING & INTEGRITY CHECK ---
@@ -69,16 +68,10 @@ const registerServiceWorker = () => {
 
 async function loadInitialState() {
     // 1. CARREGAMENTO IMEDIATO (Local-First)
-    // O usuário vê os dados locais instantaneamente.
     await loadState();
 
     // 2. SINCRONIZAÇÃO SILENCIOSA (Background)
-    // Se houver chave, tentamos buscar novidades da nuvem sem bloquear a UI.
     if (hasLocalSyncKey()) {
-        console.log("[Boot] Sync Key detectada. Iniciando Sync Silencioso...");
-        
-        // Não usamos await aqui para não travar o boot visual se a rede estiver lenta.
-        // O fetchStateFromCloud() irá atualizar o state e disparar 'render-app' se houver mudanças.
         fetchStateFromCloud().catch(e => {
             console.warn("Silent sync failed (offline?):", e);
             setSyncStatus('syncError');
@@ -87,12 +80,12 @@ async function loadInitialState() {
 }
 
 function handleFirstTimeUser() {
-    if (state.habits.length === 0) {
-        // Se tem chave mas deu erro, não cria default (pode estar baixando ainda)
-        if (hasLocalSyncKey() && state.syncState === 'syncError') {
-            return;
-        }
-        createDefaultHabit();
+    // ZERO STATE POLICY: No automatic habits.
+    // If the user hasn't onboarded yet, we just set the flag to true.
+    // This distinguishes a new user from someone who manually deleted all habits.
+    if (!state.hasOnboarded) {
+        state.hasOnboarded = true;
+        saveState();
     }
 }
 

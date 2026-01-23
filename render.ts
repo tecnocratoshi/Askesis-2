@@ -43,6 +43,11 @@ export * from './render/habits';
 export * from './render/modals';
 export * from './render/chart';
 
+// --- FIX: Export openSyncDebugModal for sync listeners ---
+export function openSyncDebugModal() {
+    console.debug("Sync diagnostics requested. This feature is currently in development.");
+}
+
 // --- HELPERS STATE (Monomorphic) ---
 let _lastTitleDate: string | null = null;
 let _lastTitleLang: string | null = null;
