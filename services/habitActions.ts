@@ -1,4 +1,3 @@
-
 /**
  * @license
  * SPDX-License-Identifier: Apache-2.0
@@ -59,15 +58,26 @@ const ActionContext = {
 
 // --- PRIVATE HELPERS ---
 
+/**
+ * Notifica a UI sobre mudanças de dados.
+ * FIX [2025-06-05]: clearActiveHabitsCache movido para fora do bloco condicional.
+ * Isso garante que novos hábitos apareçam imediatamente sem precisar de reload.
+ */
 function _notifyChanges(fullRebuild = false) {
     if (fullRebuild) {
         clearScheduleCache();
         clearHabitDomCache();
         clearSelectorInternalCaches();
-    } else {
-        clearActiveHabitsCache();
     }
+    
+    // Invalidação Universal do Cache de Ativos (Essencial para Reatividade)
+    clearActiveHabitsCache();
+    
     state.uiDirtyState.habitListStructure = state.uiDirtyState.calendarVisuals = true;
+    
+    // Libera travas de interação remanescentes
+    document.body.classList.remove('is-interaction-active', 'is-dragging-active');
+    
     saveState();
     ['render-app', 'habitsChanged'].forEach(ev => document.dispatchEvent(new CustomEvent(ev)));
 }
@@ -247,18 +257,29 @@ export function reorderHabit(movedHabitId: string, targetHabitId: string, pos: '
     if (!skip) _notifyChanges(false);
 }
 
+/**
+ * Salva o hábito a partir do modal.
+ * FIX [2025-06-05]: Invertida a ordem (closeModal ANTES de _notifyChanges).
+ * Isso garante que o motor de renderização encontre a UI "desbloqueada" (sem classes de interação)
+ * e possa injetar o novo cartão imediatamente.
+ */
 export function saveHabitFromModal() {
     if (!state.editingHabit) return;
     const { isNew, habitId, formData, targetDate } = state.editingHabit;
     if (formData.name) formData.name = formData.name.replace(/[<>{}]/g, '').trim();
     const nameToUse = formData.nameKey ? t(formData.nameKey) : formData.name!;
     if (!nameToUse) return;
+    
     const cleanFormData = {
         ...formData,
         times: [...formData.times],
         goal: { ...formData.goal },
         frequency: formData.frequency.type === 'specific_days_of_week' ? { ...formData.frequency, days: [...formData.frequency.days] } : { ...formData.frequency }
     };
+
+    // 1. Fechar o modal primeiro libera o ciclo de eventos da UI
+    closeModal(ui.editHabitModal);
+
     if (isNew) {
         const existingHabit = state.habits.find(h => {
             const lastSchedule = h.scheduleHistory[h.scheduleHistory.length - 1];
@@ -297,7 +318,6 @@ export function saveHabitFromModal() {
             times: cleanFormData.times as readonly TimeOfDay[], frequency: cleanFormData.frequency 
         }));
     }
-    closeModal(ui.editHabitModal);
 }
 
 export async function performAIAnalysis(type: 'monthly' | 'quarterly' | 'historical') {

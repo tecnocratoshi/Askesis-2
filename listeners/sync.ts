@@ -1,4 +1,3 @@
-
 /**
  * @license
  * SPDX-License-Identifier: Apache-2.0
@@ -8,11 +7,11 @@ import { ui } from "../render/ui";
 import { t } from "../i18n";
 import { downloadRemoteState, syncStateWithCloud, setSyncStatus } from "../services/cloud";
 import { loadState, saveState } from "../services/persistence";
-import { renderApp, openSyncDebugModal } from "../render";
+import { renderApp, openSyncDebugModal, clearHabitDomCache } from "../render";
 import { showConfirmationModal } from "../render/modals";
 import { storeKey, clearKey, hasLocalSyncKey, getSyncKey, isValidKeyFormat } from "../services/api";
 import { generateUUID } from "../utils";
-import { getPersistableState, state } from "../state";
+import { getPersistableState, state, clearActiveHabitsCache } from "../state";
 import { mergeStates } from "../services/dataMerge";
 
 // --- UI HELPERS ---
@@ -58,7 +57,6 @@ async function _processKey(key: string) {
     
     try {
         storeKey(key);
-        _refreshViewState(); 
         
         const cloudState = await downloadRemoteState();
 
@@ -72,12 +70,15 @@ async function _processKey(key: string) {
 
             // SMART MERGE & HYDRATION
             const mergedState = await mergeStates(localState, cloudState);
-            Object.assign(state, mergedState);
             
-            // CACHE INVALIDATION: Force UI Rebuild
-            state.uiDirtyState.habitListStructure = true;
-            state.uiDirtyState.calendarVisuals = true;
-            state.uiDirtyState.chartData = true;
+            // CRITICAL FIX [2025-06-05]: Use loadState instead of Object.assign.
+            // loadState handles cache clearing, Map hydration and DOM resetting properly.
+            await loadState(mergedState);
+            
+            // FORCE CLEAN REBUILD
+            clearActiveHabitsCache();
+            clearHabitDomCache();
+            state.uiDirtyState.habitListStructure = state.uiDirtyState.calendarVisuals = state.uiDirtyState.chartData = true;
 
             await saveState(true); // Suppress sync to avoid loop
             renderApp();
@@ -88,6 +89,7 @@ async function _processKey(key: string) {
             setSyncStatus('syncSynced');
             syncStateWithCloud(getPersistableState(), true);
         }
+        _refreshViewState(); 
     } catch (error: any) {
         if (originalKey) storeKey(originalKey);
         else clearKey();

@@ -1,4 +1,3 @@
-
 /**
  * @license
  * SPDX-License-Identifier: Apache-2.0
@@ -12,6 +11,7 @@
 import { state, AppState, Habit, HabitDailyInfo, APP_VERSION, getPersistableState } from '../state';
 import { migrateState } from './migration';
 import { HabitService } from './HabitService';
+import { clearHabitDomCache } from '../render';
 
 const DB_NAME = 'AskesisDB', DB_VERSION = 1, STORE_NAME = 'app_state';
 const LEGACY_STORAGE_KEY = 'habitTrackerState_v1';
@@ -41,21 +41,6 @@ function getDB(): Promise<IDBDatabase> {
         });
     }
     return dbPromise;
-}
-
-async function performIDB<T>(mode: IDBTransactionMode, op: (s: IDBObjectStore) => IDBRequest<T>, retries = 2): Promise<T | undefined> {
-    try {
-        const db = await getDB();
-        return new Promise((resolve, reject) => {
-            const tx = db.transaction(STORE_NAME, mode), request = op(tx.objectStore(STORE_NAME));
-            request.onsuccess = () => resolve(request.result);
-            request.onerror = () => reject(request.error);
-        });
-    } catch (e) {
-        dbPromise = null; 
-        if (retries > 0) return performIDB(mode, op, retries - 1);
-        return undefined;
-    }
 }
 
 async function saveSplitState(main: AppState, logs: any): Promise<void> {
@@ -128,7 +113,6 @@ export async function flushSaveBuffer(): Promise<void> {
 
 export async function saveState(suppressSync = false): Promise<void> {
     if (saveTimeout) clearTimeout(saveTimeout);
-    // Bind the suppressSync flag to the timeout callback
     saveTimeout = self.setTimeout(() => saveStateInternal(false, suppressSync), IDB_SAVE_DEBOUNCE_MS);
 }
 
@@ -212,7 +196,12 @@ export async function loadState(cloudState?: AppState): Promise<AppState | null>
             }
         }
 
+        // LIMPEZA ABSOLUTA DE CACHES (Fundamental para reatividade)
         ['streaksCache', 'scheduleCache', 'activeHabitsCache', 'unarchivedCache', 'habitAppearanceCache', 'daySummaryCache'].forEach(k => (state as any)[k].clear());
+        
+        // REPAIR: Também limpa o cache do DOM para garantir reconstrução total
+        clearHabitDomCache();
+
         Object.assign(state.uiDirtyState, { calendarVisuals: true, habitListStructure: true, chartData: true });
         
         document.dispatchEvent(new CustomEvent('render-app'));
@@ -222,14 +211,7 @@ export async function loadState(cloudState?: AppState): Promise<AppState | null>
 }
 
 export const clearLocalPersistence = async () => {
-    // SECURITY: Cancela qualquer salvamento pendente (debounce) para evitar que ele reescreva dados
-    // logo após o comando de delete.
     cancelPendingSave();
-    
-    // TRANSACTIONAL INTEGRITY:
-    // Em vez de usar performIDB (que resolve no onsuccess), criamos uma transação manual
-    // que só resolve no 'oncomplete'. Isso garante que o commit no disco ocorreu
-    // antes de prosseguirmos para o reload da página.
     try {
         const db = await getDB();
         await new Promise<void>((resolve, reject) => {
@@ -252,7 +234,6 @@ export const clearLocalPersistence = async () => {
 };
 
 if (typeof window !== 'undefined') {
-    // TRIGGER: Flush sync queue on close/hide
     window.addEventListener('beforeunload', () => { flushSaveBuffer(); });
     document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') flushSaveBuffer(); });
 }
