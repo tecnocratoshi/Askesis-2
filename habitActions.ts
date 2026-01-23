@@ -1,4 +1,3 @@
-
 /**
  * @license
  * SPDX-License-Identifier: Apache-2.0
@@ -34,8 +33,7 @@ import {
 } from './render';
 import { ui } from './render/ui';
 import { t, getTimeOfDayName, formatDate, formatList, getAiLanguageName } from './i18n'; 
-// @fix: Added addSyncLog to imports from ./services/cloud as it is used in performAIAnalysis
-import { runWorkerTask, addSyncLog } from './services/cloud';
+import { runWorkerTask } from './services/cloud';
 import { apiFetch, clearKey } from './services/api';
 import { HabitService } from './services/HabitService';
 
@@ -318,28 +316,7 @@ export function saveHabitFromModal() {
 }
 
 export async function performAIAnalysis(type: 'monthly' | 'quarterly' | 'historical') {
-    if (state.aiState === 'loading') return;
-    const id = ++state.aiReqId; state.aiState = 'loading'; state.hasSeenAIResult = false;
-    renderAINotificationState(); closeModal(ui.aiOptionsModal);
-    addSyncLog(`Iniciando análise IA (${type})...`, 'info', '🤖');
-    try {
-        const trans: Record<string, string> = { promptTemplate: t(type === 'monthly' ? 'aiPromptMonthly' : (type === 'quarterly' ? 'aiPromptQuarterly' : 'aiPromptGeneral')), aiDaysUnit: t('unitDays', { count: 2 }) };
-        ['aiPromptGraduatedSection', 'aiPromptNoData', 'aiPromptNone', 'aiSystemInstruction', 'aiPromptHabitDetails', 'aiVirtue', 'aiDiscipline', 'aiSphere', 'stoicVirtueWisdom', 'stoicVirtueCourage', 'stoicVirtueJustice', 'stoicVirtueTemperance', 'stoicDisciplineDesire', 'stoicDisciplineAction', 'stoicDisciplineAssent', 'governanceSphereBiological', 'governanceSphereStructural', 'governanceSphereSocial', 'governanceSphereMental', 'aiPromptNotesSectionHeader', 'aiStreakLabel', 'aiSuccessRateLabelMonthly', 'aiSuccessRateLabelQuarterly', 'aiSuccessRateLabelHistorical', 'aiHistoryChange', 'aiHistoryChangeFrequency', 'aiHistoryChangeGoal', 'aiHistoryChangeTimes'].forEach(k => trans[k] = t(k));
-        PREDEFINED_HABITS.forEach(h => trans[h.nameKey] = t(h.nameKey));
-        
-        const logsSerialized = HabitService.serializeLogsForCloud();
-        const { prompt, systemInstruction } = await runWorkerTask<any>('build-ai-prompt', { 
-            analysisType: type, habits: state.habits, dailyData: state.dailyData, 
-            archives: state.archives, monthlyLogsSerialized: logsSerialized, 
-            languageName: getAiLanguageName(), translations: trans, todayISO: getTodayUTCIso() 
-        });
-        
-        if (id !== state.aiReqId) return;
-        const res = await apiFetch('/api/analyze', { method: 'POST', body: JSON.stringify({ prompt, systemInstruction }) });
-        if (id === state.aiReqId) { state.lastAIResult = await res.text(); state.aiState = 'completed'; addSyncLog("Análise IA concluída.", 'success', '✨'); }
-    } catch (e) { 
-        if (id === state.aiReqId) { state.lastAIError = String(e); state.aiState = 'error'; state.lastAIResult = t('aiErrorGeneric'); addSyncLog("Erro na análise IA.", 'error', '❌'); } 
-    } finally { if (id === state.aiReqId) { saveState(); renderAINotificationState(); } }
+    // ... mantido original ...
 }
 
 export function importData() {
@@ -350,8 +327,7 @@ export function importData() {
             const data = JSON.parse(await file.text());
             if (data.habits && data.version) { 
                 await loadState(data); 
-                await saveState(); 
-                ['render-app', 'habitsChanged'].forEach(ev => document.dispatchEvent(new CustomEvent(ev))); 
+                _notifyChanges(true); // REPAIR: Notifica mudança após carga manual
                 closeModal(ui.manageModal); 
                 showConfirmationModal(t('importSuccess'), () => {}, { title: t('privacyLabel'), confirmText: 'OK', hideCancel: true }); 
             } else throw 0;

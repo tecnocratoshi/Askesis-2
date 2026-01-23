@@ -32,6 +32,7 @@ const workerCallbacks = new Map<string, { resolve: (val: any) => void, reject: (
 function getWorker(): Worker {
     if (!syncWorker) {
         syncWorker = new Worker('./sync-worker.js', { type: 'module' });
+        
         syncWorker.onmessage = (e) => {
             const { id, status, result, error } = e.data;
             const callback = workerCallbacks.get(id);
@@ -39,40 +40,68 @@ function getWorker(): Worker {
                 if (status === 'success') {
                     callback.resolve(result);
                 } else {
-                    callback.reject(new Error(error));
+                    callback.reject(new Error(error || "Worker Task Failed"));
                 }
                 workerCallbacks.delete(id);
             }
         };
         
         syncWorker.onerror = (e) => {
-            console.error("Critical Worker Error:", e);
+            console.error("CRITICAL: Sync Worker Error", e);
+            workerCallbacks.forEach((cb, id) => {
+                cb.reject(new Error("Worker thread crashed"));
+                workerCallbacks.delete(id);
+            });
+            syncWorker = null; 
         };
     }
     return syncWorker;
 }
 
-export function runWorkerTask<T>(type: 'encrypt' | 'decrypt' | 'build-ai-prompt' | 'build-quote-analysis-prompt' | 'prune-habit' | 'archive', payload: any, key?: string): Promise<T> {
-    return new Promise((resolve, reject) => {
-        const id = generateUUID();
-        workerCallbacks.set(id, { resolve, reject });
-        getWorker().postMessage({ id, type, payload, key });
-    });
-}
-
-// @fix: Added missing addSyncLog function export to resolve import error in habitActions.ts
-export function addSyncLog(msg: string, type: 'success' | 'error' | 'info' = 'info', icon?: string) {
+/**
+ * Adiciona um log de sincronização ou atividade da IA ao estado global.
+ */
+export function addSyncLog(msg: string, type: 'success' | 'error' | 'info', icon?: string) {
     if (!state.syncLogs) state.syncLogs = [];
-    state.syncLogs.push({
+    state.syncLogs.unshift({
         time: Date.now(),
         msg,
         type,
         icon
     });
-    // Keep logs reasonable size
     if (state.syncLogs.length > 50) {
-        state.syncLogs.shift();
+        state.syncLogs.length = 50;
     }
+}
+
+/**
+ * Executa uma tarefa no Web Worker com timeout de segurança.
+ */
+export function runWorkerTask<T>(type: 'encrypt' | 'decrypt' | 'build-ai-prompt' | 'build-quote-analysis-prompt' | 'prune-habit' | 'archive', payload: any, key?: string): Promise<T> {
+    return new Promise((resolve, reject) => {
+        const id = generateUUID();
+        const timeoutMs = 15000; 
+        
+        const timeoutId = setTimeout(() => {
+            if (workerCallbacks.has(id)) {
+                workerCallbacks.delete(id);
+                reject(new Error("Worker Timeout"));
+            }
+        }, timeoutMs);
+
+        workerCallbacks.set(id, { 
+            resolve: (val) => { clearTimeout(timeoutId); resolve(val); }, 
+            reject: (err) => { clearTimeout(timeoutId); reject(err); } 
+        });
+        
+        try {
+            getWorker().postMessage({ id, type, payload, key });
+        } catch (e) {
+            clearTimeout(timeoutId);
+            workerCallbacks.delete(id);
+            reject(e);
+        }
+    });
 }
 
 interface ServerPayload {
@@ -89,24 +118,23 @@ export function setSyncStatus(statusKey: 'syncSaving' | 'syncSynced' | 'syncErro
 
 async function resolveConflictWithServerState(serverPayload: ServerPayload) {
     const syncKey = getSyncKey();
-    if (!syncKey) {
-        setSyncStatus('syncError');
-        return;
-    }
+    if (!syncKey) return;
     
     try {
         const serverState = await runWorkerTask<AppState>('decrypt', serverPayload.state, syncKey);
         const localState = getPersistableState();
         const mergedState = await mergeStates(localState, serverState);
 
-        await persistStateLocally(mergedState);
+        await persistStateLocally(mergedState, true); 
         await loadState(mergedState);
         
         renderApp();
         setSyncStatus('syncSynced'); 
         document.dispatchEvent(new CustomEvent('habitsChanged'));
 
+        // Re-sincroniza o estado fundido para garantir que o servidor tenha a versão final
         syncStateWithCloud(mergedState, true);
+        
     } catch (error) {
         console.error("Failed to resolve conflict:", error);
         setSyncStatus('syncError');
@@ -129,6 +157,7 @@ async function performSync() {
 
     try {
         const encryptedState = await runWorkerTask<string>('encrypt', appState, syncKey);
+
         const payload: ServerPayload = {
             lastModified: appState.lastModified,
             state: encryptedState,
@@ -139,58 +168,72 @@ async function performSync() {
             body: JSON.stringify(payload),
         }, true);
 
-        if (response.status === 409) {
-            const serverPayload: ServerPayload = await response.json();
-            await resolveConflictWithServerState(serverPayload);
-        } else if (response.ok || response.status === 304) {
+        if (response.status === 200 || response.status === 304) {
             setSyncStatus('syncSynced');
             document.dispatchEvent(new CustomEvent('habitsChanged')); 
+        } else if (response.status === 409) {
+            const serverPayload: ServerPayload = await response.json();
+            await resolveConflictWithServerState(serverPayload);
         } else {
-            throw new Error(`Sync failed: ${response.status}`);
+            throw new Error(`Sync Error: ${response.status}`);
         }
     } catch (error) {
-        console.error("Sync error:", error);
+        console.error("Sync failure:", error);
         setSyncStatus('syncError');
     } finally {
         isSyncInProgress = false;
-        if (pendingSyncState) performSync();
+        // Se houve mudanças enquanto esta sincronização estava rodando, agenda a próxima
+        if (pendingSyncState) {
+            setTimeout(performSync, 100);
+        }
     }
 }
 
 export function syncStateWithCloud(appState: AppState, immediate = false) {
     if (!hasLocalSyncKey()) return;
+
     pendingSyncState = appState; 
-    setSyncStatus('syncSaving');
+    
+    // Só atualiza para "Salvando" se não estivermos no meio de um processo
+    if (state.syncState !== 'syncSaving') {
+        setSyncStatus('syncSaving');
+    }
+
     if (syncTimeout) clearTimeout(syncTimeout);
     if (isSyncInProgress) return;
-    if (immediate) performSync();
-    else syncTimeout = window.setTimeout(performSync, DEBOUNCE_DELAY);
+
+    if (immediate) {
+        performSync();
+    } else {
+        syncTimeout = window.setTimeout(performSync, DEBOUNCE_DELAY);
+    }
 }
 
 export async function fetchStateFromCloud(): Promise<AppState | undefined> {
     if (!hasLocalSyncKey()) return undefined;
+
     const syncKey = getSyncKey();
     if (!syncKey) return undefined;
 
     try {
         const response = await apiFetch('/api/sync', {}, true);
-        if (!response.ok) throw new Error("Fetch failed");
+        if (!response.ok) throw new Error(`Fetch failed: ${response.status}`);
 
-        let data = await response.json();
-        // REPAIR: Trata casos onde o servidor envia string JSON em vez de objeto
-        if (typeof data === 'string') data = JSON.parse(data);
+        const data: ServerPayload | null = await response.json();
 
         if (data && data.state) {
             const appState = await runWorkerTask<AppState>('decrypt', data.state, syncKey);
             setSyncStatus('syncSynced');
             return appState;
         } else {
-            if (state.habits.length > 0) syncStateWithCloud(getPersistableState(), true);
+            if (state.habits.length > 0) {
+                syncStateWithCloud(getPersistableState(), true);
+            }
             setSyncStatus('syncSynced');
             return undefined;
         }
     } catch (error) {
-        console.error("Cloud fetch error:", error);
+        console.error("Failed to fetch state:", error);
         setSyncStatus('syncError');
         throw error;
     }
