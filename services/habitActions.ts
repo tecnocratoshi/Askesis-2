@@ -42,7 +42,6 @@ import { runWorkerTask } from './cloud';
 import { apiFetch, clearKey } from './api';
 import { HabitService } from './HabitService';
 
-// Assumindo que a pasta 'data' está na raiz (src/data). Se estiver em services/data, use ./data
 import { PREDEFINED_HABITS } from '../data/predefinedHabits'; 
 
 const ARCHIVE_DAYS_THRESHOLD = 90;
@@ -546,7 +545,21 @@ export async function resetApplicationData() {
     } 
 }
 
-export function handleSaveNote() { if (!state.editingNoteFor) return; const { habitId, date, time } = state.editingNoteFor, val = ui.notesTextarea.value.trim(), inst = ensureHabitInstanceData(date, habitId, time); if ((inst.note || '') !== val) { inst.note = val || undefined; state.uiDirtyState.habitListStructure = true; saveState(); document.dispatchEvent(new CustomEvent('render-app')); } closeModal(ui.notesModal); }
+export function handleSaveNote() { 
+    if (!state.editingNoteFor) return; 
+    
+    const { habitId, date, time } = state.editingNoteFor;
+    const val = ui.notesTextarea.value.trim();
+    const inst = ensureHabitInstanceData(date, habitId, time);
+    
+    if ((inst.note || '') !== val) { 
+        inst.note = val || undefined; 
+        state.uiDirtyState.habitListStructure = true; 
+        saveState(); 
+        document.dispatchEvent(new CustomEvent('render-app')); 
+    } 
+    closeModal(ui.notesModal); 
+}
 
 export function setGoalOverride(habitId: string, d: string, t: TimeOfDay, v: number) { 
     try {
@@ -615,7 +628,22 @@ export function exportData() {
     URL.revokeObjectURL(url);
 }
 
-export function handleDayTransition() { const today = getTodayUTCIso(); clearActiveHabitsCache(); state.uiDirtyState.calendarVisuals = state.uiDirtyState.habitListStructure = state.uiDirtyState.chartData = true; state.calendarDates = []; if (state.selectedDate !== today) state.selectedDate = today; document.dispatchEvent(new CustomEvent('render-app')); }
+export function handleDayTransition() { 
+    const today = getTodayUTCIso(); 
+    
+    clearActiveHabitsCache(); 
+    
+    state.uiDirtyState.calendarVisuals = true;
+    state.uiDirtyState.habitListStructure = true;
+    state.uiDirtyState.chartData = true; 
+    state.calendarDates = []; 
+    
+    if (state.selectedDate !== today) {
+        state.selectedDate = today; 
+    }
+    
+    document.dispatchEvent(new CustomEvent('render-app')); 
+}
 
 function _processAndFormatCelebrations(
     pendingIds: string[], 

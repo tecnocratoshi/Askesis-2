@@ -37,6 +37,25 @@ body {
     -webkit-text-size-adjust: 100%;
 }
 
+/* --- VIEW TRANSITIONS (SWEET SPOT IMPROVEMENT) --- */
+/* Configura transições nativas suaves entre estados (ex: mudar de dia) */
+::view-transition-old(root),
+::view-transition-new(root) {
+    animation-duration: 0.25s; /* Rápido e sutil */
+    animation-timing-function: cubic-bezier(0.25, 1, 0.5, 1); /* Curva "Stoic Ease" */
+}
+
+/* Isola o cabeçalho para que ele não participe da transição de "fade/slide" do conteúdo principal.
+   Isso faz com que apenas os dados mudem, enquanto a estrutura permanece sólida. */
+.app-header {
+    view-transition-name: app-header;
+}
+
+/* O corpo principal (lista de hábitos) anima separadamente */
+main {
+    view-transition-name: main-content;
+}
+
 /* CHAOS FIX: GLOBAL INTERACTION LOCK
    Desabilita smooth scrolling e eventos de ponteiro não essenciais quando uma interação física
    (Swipe, Drag, Rotary) está ativa. Isso evita conflitos de thread e garante 60fps. */
@@ -139,30 +158,6 @@ body.is-interaction-active * {
     border-color: var(--color-red) !important;
 }
 
-/* --- ANIMAÇÕES DE NAVEGAÇÃO (SLIDE) --- */
-/* V7.3: Slide suave sem View Transitions API para evitar flashes */
-/* Direção: Entrando da Direita (Futuro) */
-@keyframes slide-in-from-right {
-    0% { opacity: 0; transform: translateX(30px); }
-    100% { opacity: 1; transform: translateX(0); }
-}
-
-/* Direção: Entrando da Esquerda (Passado) */
-@keyframes slide-in-from-left {
-    0% { opacity: 0; transform: translateX(-30px); }
-    100% { opacity: 1; transform: translateX(0); }
-}
-
-/* Classes utilitárias aplicadas via JS */
-.anim-slide-left {
-    /* 0.35s = Velocidade padrão nativa (suave mas perceptível) */
-    animation: slide-in-from-left 0.35s cubic-bezier(0.2, 0.0, 0.2, 1) forwards;
-}
-
-.anim-slide-right {
-    animation: slide-in-from-right 0.35s cubic-bezier(0.2, 0.0, 0.2, 1) forwards;
-}
-
 /* A11Y & PERFORMANCE: Respeita a preferência do usuário por movimento reduzido. */
 /* CRITICAL LOGIC: Evita desconforto vestibular e economiza bateria em dispositivos configurados para isso. */
 @media (prefers-reduced-motion: reduce) {
@@ -171,5 +166,12 @@ body.is-interaction-active * {
         animation-iteration-count: 1 !important;
         transition-duration: 0.01ms !important;
         scroll-behavior: auto !important;
+        /* Disable view transitions if user prefers reduced motion */
+        view-transition-name: none !important;
+    }
+    ::view-transition-group(*),
+    ::view-transition-old(*),
+    ::view-transition-new(*) {
+        animation-duration: 0s !important;
     }
 }
