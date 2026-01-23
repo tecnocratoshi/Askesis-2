@@ -96,12 +96,11 @@ export const UI_ICONS = {
     endAction: SVG_OPEN + PATH_OPEN + D_CIRCLE_OUTLINE + 'M15 9l-6 6M9 9l6 6' + SVG_CLOSE,
     deletePermanentAction: SVG_OPEN + PATH_OPEN + D_TRASH + SVG_CLOSE,
     edit: SVG_OPEN + PATH_OPEN + D_PEN + SVG_CLOSE,
-    colorPicker: '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" aria-hidden="true" focusable="false"><path fill="#e74c3c" d="M12 12 L12 2 A10 10 0 0 1 22 12 Z"/><path fill="#f1c40f" d="M12 12 L2 12 A10 10 0 0 1 12 2 Z"/><path fill="#2ecc71" d="M12 12 L12 22 A10 10 0 0 1 2 12 Z"/><path fill="#3498db" d="M12 12 L22 12 A10 10 0 0 1 12 22 Z"/></svg>',
+    colorPicker: SVG_OPEN + PATH_OPEN + 'M12 2.69l5.66 5.66a8 8 0 1 1-11.31 0z' + SVG_CLOSE,
     morning: SVG_OPEN + PATH_OPEN + 'M12 9V7M4.2 10.2l1.4 1.4M19.8 10.2l-1.4 1.4M1 18h2m18 0h2M17 18a5 5 0 00-10 0M2 22h20' + SVG_CLOSE,
     afternoon: SVG_OPEN + PATH_OPEN + D_SUN + SVG_CLOSE,
     evening: SVG_OPEN + PATH_OPEN + D_MOON + SVG_CLOSE,
-    calendar: SVG_OPEN + PATH_OPEN + 'M19 4H5a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2V6a2 2 0 00-2-2zM16 2v4M8 2v4M3 10h18' + SVG_CLOSE,
-    backArrow: '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" aria-hidden="true" focusable="false" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M15 18l-6-6 6-6"/></svg>',
+    calendar: SVG_OPEN + PATH_OPEN + 'M19 4H5a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2V6a2 2 0 00-2-2zM16 2v4M8 2v4M3 10h18' + SVG_CLOSE
 } as const;
 
 export type HabitIconKey = keyof typeof HABIT_ICONS;

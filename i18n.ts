@@ -1,3 +1,4 @@
+
 /**
  * @license
  * SPDX-License-Identifier: Apache-2.0
@@ -20,8 +21,24 @@
  * - `locales/*.json`: Arquivos de tradução.
  */
 
-import { state, TimeOfDay, LANGUAGES } from './state';
+import { state, TimeOfDay } from './state';
 import { pushToOneSignal } from './utils';
+
+// TYPE POLYFILL: Garante que Intl.ListFormat seja reconhecido mesmo em configurações TS antigas (ES2020 ou inferior).
+declare global {
+    namespace Intl {
+        interface ListFormatOptions {
+            localeMatcher?: "lookup" | "best fit";
+            type?: "conjunction" | "disjunction" | "unit";
+            style?: "long" | "short" | "narrow";
+        }
+
+        class ListFormat {
+            constructor(locales?: string | string[], options?: ListFormatOptions);
+            public format(list: Iterable<string>): string;
+        }
+    }
+}
 
 // INTERFACE ABSTRATA: Permite que o cache aceite tanto a classe nativa quanto o mock de fallback sem erros de tipo.
 interface ListFormatter {
@@ -51,7 +68,6 @@ const listFormatCache: Record<string, ListFormatter> = {};
 // NUMERIC CACHE [2025-04-14]: Cache para formatadores numéricos (Int, Decimal, Evolution).
 // Evita recriar Intl.NumberFormat em loops de renderização de gráficos.
 type NumberFormatBundle = { int: Intl.NumberFormat; dec: Intl.NumberFormat; evo: Intl.NumberFormat };
-type NumberFormatType = keyof NumberFormatBundle;
 const numberFormatCache: Record<string, NumberFormatBundle> = {};
 
 // PERFORMANCE: Cache imutável para nomes de dias da semana por idioma.
@@ -208,8 +224,7 @@ function updateHotCache(langCode: string) {
     // 4. List Format (Arrays)
     if (!listFormatCache[langCode]) {
         try {
-            // @fix: Cast Intl to any to support ListFormat which might be missing in TS libs
-            listFormatCache[langCode] = new (Intl as any).ListFormat(langCode, { style: 'long', type: 'conjunction' });
+            listFormatCache[langCode] = new Intl.ListFormat(langCode, { style: 'long', type: 'conjunction' });
         } catch (e) {
             // ROBUSTEZ: Fallback seguro se a API não existir (Browser antigo).
             listFormatCache[langCode] = { 
@@ -402,33 +417,37 @@ export function formatDate(date: Date | number | null | undefined, options: Intl
 }
 
 /**
- * REFACTOR [MAINTAINABILITY]: Helper interno para formatação de números.
- * Centraliza a lógica de verificação de idioma e acesso ao cache, eliminando redundância.
- */
-function _formatNumber(num: number, type: NumberFormatType): string {
-    if (state.activeLanguageCode !== currentLangCode) {
-        updateHotCache(state.activeLanguageCode);
-    }
-    return currentNumberFormat![type].format(num);
-}
-
-/**
  * Formata um número inteiro usando as regras do locale ativo.
  * Ex: 1000 -> "1.000" (PT) ou "1,000" (EN).
  */
-export const formatInteger = (num: number) => _formatNumber(num, 'int');
+export function formatInteger(num: number): string {
+    if (state.activeLanguageCode !== currentLangCode) {
+        updateHotCache(state.activeLanguageCode);
+    }
+    return currentNumberFormat!.int.format(num);
+}
 
 /**
  * Formata um número decimal (fixo em 2 casas) usando as regras do locale ativo.
  * Ex: 10.5 -> "10,50" (PT) ou "10.50" (EN).
  */
-export const formatDecimal = (num: number) => _formatNumber(num, 'dec');
+export function formatDecimal(num: number): string {
+    if (state.activeLanguageCode !== currentLangCode) {
+        updateHotCache(state.activeLanguageCode);
+    }
+    return currentNumberFormat!.dec.format(num);
+}
 
 /**
  * Formata um número de evolução/porcentagem (fixo em 1 casa) usando as regras do locale ativo.
  * Ex: 12.5 -> "12,5" (PT) ou "12.5" (EN).
  */
-export const formatEvolution = (num: number) => _formatNumber(num, 'evo');
+export function formatEvolution(num: number): string {
+    if (state.activeLanguageCode !== currentLangCode) {
+        updateHotCache(state.activeLanguageCode);
+    }
+    return currentNumberFormat!.evo.format(num);
+}
 
 /**
  * Formata uma lista de strings (ex: "A, B e C") usando as regras do idioma ativo.
@@ -459,16 +478,6 @@ export function getLocaleDayName(date: Date): string {
     }
     // getUTCDay() returns 0 for Sunday, matches array index
     return currentWeekdayNames[date.getUTCDay()] || '';
-}
-
-/**
- * Obtém o nome localizado do idioma ativo para ser usado nos prompts da IA.
- */
-export function getAiLanguageName(): string {
-    if (state.activeLanguageCode !== currentLangCode) {
-        updateHotCache(state.activeLanguageCode);
-    }
-    return t(LANGUAGES.find(l => l.code === state.activeLanguageCode)?.nameKey || 'langEnglish');
 }
 
 export async function setLanguage(langCode: 'pt' | 'en' | 'es') {

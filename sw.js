@@ -1,3 +1,4 @@
+
 /**
  * @license
  * SPDX-License-Identifier: Apache-2.0
@@ -6,6 +7,10 @@
 /**
  * @file sw.js
  * @description Service Worker: Proxy de Rede e Gerenciador de Cache (Offline Engine).
+ * 
+ * [SERVICE WORKER CONTEXT]:
+ * Execução em Thread de Background. 
+ * Otimizado para latência zero no interceptador de rede (`fetch`).
  */
 
 try {
@@ -14,8 +19,8 @@ try {
     // Non-blocking failure for optional SDK
 }
 
-// CONSTANTS (Version Bump to Force Update)
-const CACHE_NAME = 'habit-tracker-v19-sync-final';
+// CONSTANTS (Build-time injected)
+const CACHE_NAME = 'habit-tracker-v9';
 
 // PERF: Static Asset List (Pre-allocated)
 const CACHE_FILES = [
@@ -23,6 +28,7 @@ const CACHE_FILES = [
     '/index.html',
     '/bundle.js',
     '/bundle.css',
+    '/sync-worker.js',
     '/manifest.json',
     '/locales/pt.json',
     '/locales/en.json',
@@ -54,9 +60,6 @@ const updateShellCache = (res) => {
 // --- INSTALL PHASE ---
 
 self.addEventListener('install', (event) => {
-    // FORCE UPDATE: Assume control immediately
-    self.skipWaiting();
-    
     event.waitUntil(
         caches.open(CACHE_NAME).then(cache => {
             return Promise.all(CACHE_FILES.map(url => 
@@ -65,14 +68,13 @@ self.addEventListener('install', (event) => {
                     return cache.put(url, res);
                 })
             ));
-        })
+        }).then(() => self.skipWaiting())
     );
 });
 
 // --- ACTIVATE PHASE ---
 
 self.addEventListener('activate', (event) => {
-    // FORCE UPDATE: Claim clients immediately to serve new files
     event.waitUntil(
         Promise.all([
             self.clients.claim(),
@@ -88,25 +90,29 @@ self.addEventListener('activate', (event) => {
 
 self.addEventListener('fetch', (event) => {
     const req = event.request;
+    // Otimização: No contexto do SW, a URL é garantida.
     const url = new URL(req.url); 
 
     // 1. Strict API Bypass
     if (url.pathname.startsWith('/api/')) return;
 
-    // 2. Navigation Strategy (App Shell)
+    // 2. Navigation Strategy (App Shell) with Lie-fi Protection & Cache Update
     if (req.mode === 'navigate') {
         event.respondWith(
             (async () => {
                 try {
+                    // A. Navigation Preload (SOTA Optimization)
                     const preloadResp = await event.preloadResponse;
                     if (preloadResp) return updateShellCache(preloadResp);
 
+                    // B. Network Race with Timeout
                     const networkResp = await Promise.race([
                         fetch(req),
                         timeout(NETWORK_TIMEOUT_MS)
                     ]);
                     return updateShellCache(networkResp);
                 } catch (error) {
+                    // C. Offline Fallback
                     return caches.match(HTML_FALLBACK, MATCH_OPTS);
                 }
             })()
@@ -120,25 +126,27 @@ self.addEventListener('fetch', (event) => {
             if (cached) return cached;
 
             return fetch(req).then(networkResponse => {
+                // Validation
                 if (!networkResponse || networkResponse.status !== 200 || networkResponse.type !== 'basic') {
                     return networkResponse;
                 }
 
+                // Captive Portal Protection
                 const contentType = networkResponse.headers.get('content-type');
                 const isAsset = req.destination && ['script', 'style', 'image'].includes(req.destination);
                 
                 if (isAsset && contentType && contentType.includes('text/html')) {
+                    console.warn(`[SW] Captive Portal detected. Blocked caching of HTML for ${req.destination}.`);
                     return networkResponse;
                 }
 
+                // Dynamic Caching (Fire & Forget)
                 const responseToCache = networkResponse.clone();
                 caches.open(CACHE_NAME).then(cache => {
-                    cache.put(req, responseToCache).catch(() => {});
+                    cache.put(req, responseToCache).catch(() => {}); // Silent fail for quota
                 });
 
                 return networkResponse;
-            }).catch(err => {
-                return new Response(null, { status: 408, statusText: "Network Failure" });
             });
         })
     );
