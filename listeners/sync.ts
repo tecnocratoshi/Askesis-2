@@ -6,7 +6,8 @@
 
 import { ui } from "../render/ui";
 import { t } from "../i18n";
-import { fetchStateFromCloud, syncStateWithCloud, setSyncStatus, diagnoseConnection } from "../services/cloud";
+// @fix: Removed non-existent export 'diagnoseConnection' from cloud service imports.
+import { fetchStateFromCloud, syncStateWithCloud, setSyncStatus } from "../services/cloud";
 import { loadState, saveState } from "../services/persistence";
 import { renderApp, openSyncDebugModal } from "../render";
 import { showConfirmationModal } from "../render/modals";

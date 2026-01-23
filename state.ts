@@ -142,6 +142,7 @@ export interface SyncLog {
     time: number;
     msg: string;
     type: 'success' | 'error' | 'info';
+    icon?: string; // New: SVG or emoji indicator
 }
 
 // --- BITMASK STRUCTURES ---
@@ -166,7 +167,7 @@ export interface AppState {
     readonly pendingConsolidationHabitIds: readonly string[];
     readonly quoteState?: QuoteDisplayState;
     readonly hasOnboarded: boolean; // Flag to prevent recreation of default habits
-    syncLogs?: SyncLog[];
+    readonly syncLogs?: SyncLog[];
     monthlyLogs?: Map<string, bigint>;
 }
 
@@ -329,7 +330,7 @@ export function getPersistableState(): AppState {
         pendingConsolidationHabitIds: state.pendingConsolidationHabitIds,
         quoteState: state.quoteState,
         hasOnboarded: state.hasOnboarded,
-        syncLogs: state.syncLogs.slice(-50),
+        syncLogs: state.syncLogs.slice(-50), // Persiste apenas os últimos 50 logs para evitar bloat
     };
 }
 

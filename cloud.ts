@@ -53,9 +53,9 @@ function getWorker(): Worker {
 }
 
 /**
- * @fix: Updated type union to include all task types used in the application.
+ * @fix: Updated type union to include all task types used in the application and removed duplicates.
  */
-export function runWorkerTask<T>(type: 'encrypt' | 'decrypt' | 'build-ai-prompt' | 'build-quote-analysis-prompt' | 'prune-habit' | 'archive' | 'build-quote-analysis-prompt', payload: any, key?: string): Promise<T> {
+export function runWorkerTask<T>(type: 'encrypt' | 'decrypt' | 'build-ai-prompt' | 'build-quote-analysis-prompt' | 'prune-habit' | 'archive', payload: any, key?: string): Promise<T> {
     return new Promise((resolve, reject) => {
         const id = generateUUID();
         workerCallbacks.set(id, { resolve, reject });
