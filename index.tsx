@@ -68,15 +68,15 @@ const registerServiceWorker = () => {
 
 async function loadInitialState() {
     // 1. CARREGAMENTO IMEDIATO (Local-First)
-    // Carregamos do IndexedDB primeiro para ter um estado base para comparação
+    // Carrega do IndexedDB primeiro para ter uma base de comparação
     await loadState();
 
     // 2. SINCRONIZAÇÃO PROATIVA (Background)
     // fetchStateFromCloud agora cuida da comparação de timestamps e decide se faz Push ou Pull
     if (hasLocalSyncKey()) {
         fetchStateFromCloud().catch(e => {
-            console.warn("Proactive boot sync check failed (offline?):", e);
-            // Se falhar no boot mas tivermos chave, marcamos como erro mas mantemos local
+            console.warn("Proactive boot sync failed (offline?):", e);
+            // Se houver erro no boot, marcamos mas o app continua funcional localmente
             setSyncStatus('syncError');
         });
     }
