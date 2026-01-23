@@ -34,17 +34,7 @@ import { setTextContent, updateReelRotaryARIA } from './render/dom';
 import { renderCalendar, renderFullCalendar } from './render/calendar';
 import { renderHabits } from './render/habits';
 import { renderChart } from './render/chart';
-// @fix: Explicitly ensure all required modal members are imported from modals.ts for re-export
-import { 
-    setupManageModal, 
-    refreshEditModalUI, 
-    renderLanguageFilter, 
-    renderIconPicker, 
-    renderFrequencyOptions,
-    renderExploreHabits,
-    openEditModal,
-    renderColorPicker
-} from './render/modals';
+import { setupManageModal, refreshEditModalUI, renderLanguageFilter, renderIconPicker, renderFrequencyOptions } from './render/modals';
 
 // Re-exporta tudo para manter compatibilidade
 export * from './render/dom';
