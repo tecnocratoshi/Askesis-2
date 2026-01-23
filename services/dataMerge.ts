@@ -14,7 +14,7 @@ import { HabitService } from './HabitService';
 import { getTodayUTCIso } from '../utils';
 
 /**
- * Hidrata monthlyLogs se vieram como Array bruto ou Objeto (do JSON sem reviver completo).
+ * Hidrata monthlyLogs garantindo que BigInts e Maps sejam reconstruídos corretamente.
  */
 function hydrateLogs(state: AppState) {
     if (state.monthlyLogs && !(state.monthlyLogs instanceof Map)) {
@@ -28,14 +28,15 @@ function hydrateLogs(state: AppState) {
             const val = Array.isArray(item) ? item[1] : item[1];
             
             try {
-                // Aceita BigInt nativo, strings numéricas ou objetos de transporte
                 if (val && typeof val === 'object' && val.__type === 'bigint') {
                     map.set(key, BigInt(val.val));
+                } else if (typeof val === 'string' && val.startsWith('0x')) {
+                    map.set(key, BigInt(val));
                 } else {
-                    map.set(key, typeof val === 'bigint' ? val : BigInt(val));
+                    map.set(key, BigInt(val));
                 }
             } catch(e) {
-                console.warn(`[Merge] Failed to hydrate bitmask for ${key}:`, val);
+                console.warn(`[Merge] Failed to hydrate bitmask for ${key}`);
             }
         });
         state.monthlyLogs = map;
@@ -45,63 +46,54 @@ function hydrateLogs(state: AppState) {
 /**
  * Mescla registros diários (Notas e Overrides).
  */
-function mergeDayRecord(source: Record<string, HabitDailyInfo>, target: Record<string, HabitDailyInfo>, preserveNotes = true) {
+function mergeDayRecord(source: Record<string, HabitDailyInfo>, target: Record<string, HabitDailyInfo>) {
     for (const habitId in source) {
         if (!target[habitId]) {
             target[habitId] = source[habitId];
             continue;
         }
 
-        const sourceHabitData = source[habitId];
-        const targetHabitData = target[habitId];
-        const sourceInstances = sourceHabitData.instances || {};
-        const targetInstances = targetHabitData.instances || {};
+        const sourceInstances = source[habitId].instances || {};
+        const targetInstances = target[habitId].instances || {};
 
         for (const time in sourceInstances) {
             const srcInst = sourceInstances[time as any];
             const tgtInst = targetInstances[time as any];
 
             if (!srcInst) continue;
-
             if (!tgtInst) {
                 targetInstances[time as any] = srcInst;
             } else {
-                if (preserveNotes) {
-                    const sNoteLen = srcInst.note ? srcInst.note.length : 0;
-                    const tNoteLen = tgtInst.note ? tgtInst.note.length : 0;
-                    if (sNoteLen > tNoteLen) {
-                        tgtInst.note = srcInst.note;
-                    }
+                // Preserva nota mais longa ou override mais recente
+                if ((srcInst.note?.length || 0) > (tgtInst.note?.length || 0)) {
+                    tgtInst.note = srcInst.note;
                 }
-                // Mescla overrides se existirem
                 if (srcInst.goalOverride !== undefined) {
                     tgtInst.goalOverride = srcInst.goalOverride;
                 }
             }
         }
         
-        if (sourceHabitData.dailySchedule) {
-             targetHabitData.dailySchedule = sourceHabitData.dailySchedule;
+        if (source[habitId].dailySchedule) {
+             target[habitId].dailySchedule = source[habitId].dailySchedule;
         }
     }
 }
 
 export async function mergeStates(local: AppState, incoming: AppState): Promise<AppState> {
-    // Sanitização de Tipos (Anti-Crash)
     hydrateLogs(local);
     hydrateLogs(incoming);
 
     const localTs = local.lastModified || 0;
     const incomingTs = incoming.lastModified || 0;
-    const todayISO = getTodayUTCIso();
     
-    // 1. Define Base (Vencedor) por Timestamp
+    // Define base pelo mais recente
     let winner = localTs > incomingTs ? local : incoming;
     let loser = localTs > incomingTs ? incoming : local;
     
     const merged: AppState = structuredClone(winner);
     
-    // 2. Habits Union
+    // 1. União de Hábitos (por ID)
     const mergedIds = new Set(merged.habits.map(h => h.id));
     loser.habits.forEach(h => {
         if (!mergedIds.has(h.id)) {
@@ -109,47 +101,20 @@ export async function mergeStates(local: AppState, incoming: AppState): Promise<
         }
     });
 
-    // 3. Daily Data Merge
+    // 2. Mesclagem de Dados Diários (Notas/Overrides)
     for (const date in loser.dailyData) {
         if (!merged.dailyData[date]) {
             (merged.dailyData as any)[date] = loser.dailyData[date];
         } else {
-            // Mescla dados granulares (notas)
-            mergeDayRecord(loser.dailyData[date], (merged.dailyData as any)[date], true);
+            mergeDayRecord(loser.dailyData[date], (merged.dailyData as any)[date]);
         }
     }
 
-    // 4. Archives Union
-    if (loser.archives) {
-        (merged as any).archives = merged.archives || {};
-        for (const year in loser.archives) {
-            if (!merged.archives[year]) {
-                (merged.archives as any)[year] = loser.archives[year];
-            }
-        }
-    }
-    
-    // 5. Monthly Logs (Bitmasks) - OPERAÇÃO CRÍTICA
-    // Funde logs acumulativamente usando bitwise OR. 
-    // REPAIR: Removemos overwrites destrutivos de data específica.
+    // 3. Mesclagem de Logs de Status (Bitmasks) - CRÍTICO
     merged.monthlyLogs = HabitService.mergeLogs(winner.monthlyLogs, loser.monthlyLogs);
     
-    // 6. Time Integrity
-    const now = Date.now();
-    merged.lastModified = Math.max(localTs, incomingTs, now) + 1;
-
-    // Meta Data Merge
-    // @ts-ignore
-    merged.version = Math.max(local.version || 0, incoming.version || 0);
-    const mergeList = (a: readonly any[] | undefined, b: readonly any[] | undefined) => 
-        Array.from(new Set([...(a||[]), ...(b||[])]));
-
-    // @ts-ignore
-    merged.notificationsShown = mergeList(merged.notificationsShown, loser.notificationsShown);
-    // @ts-ignore
-    merged.pending21DayHabitIds = mergeList(merged.pending21DayHabitIds, loser.pending21DayHabitIds);
-    // @ts-ignore
-    merged.pendingConsolidationHabitIds = mergeList(merged.pendingConsolidationHabitIds, loser.pendingConsolidationHabitIds);
+    // 4. Integridade Temporal
+    merged.lastModified = Math.max(localTs, incomingTs, Date.now()) + 1;
 
     return merged;
 }
