@@ -1,3 +1,4 @@
+
 /**
  * @license
  * SPDX-License-Identifier: Apache-2.0
@@ -62,25 +63,15 @@ async function _processKey(key: string) {
 
         if (cloudState) {
             const localState = getPersistableState();
-
-            // REPAIR: Sanitização manual recomendada antes do merge
-            if (cloudState.monthlyLogs && !(cloudState.monthlyLogs instanceof Map)) {
-                cloudState.monthlyLogs = new Map(Object.entries(cloudState.monthlyLogs)); 
-            }
-
-            // SMART MERGE & HYDRATION
             const mergedState = await mergeStates(localState, cloudState);
             
-            // CRITICAL FIX [2025-06-05]: Use loadState instead of Object.assign.
-            // loadState handles cache clearing, Map hydration and DOM resetting properly.
             await loadState(mergedState);
             
-            // FORCE CLEAN REBUILD
             clearActiveHabitsCache();
             clearHabitDomCache();
             state.uiDirtyState.habitListStructure = state.uiDirtyState.calendarVisuals = state.uiDirtyState.chartData = true;
 
-            await saveState(true); // Suppress sync to avoid loop
+            await saveState(true);
             renderApp();
             
             setSyncStatus('syncSynced');
@@ -91,17 +82,18 @@ async function _processKey(key: string) {
         }
         _refreshViewState(); 
     } catch (error: any) {
+        // Em caso de erro catastrófico ou 401, revertemos a chave se houver uma anterior
         if (originalKey) storeKey(originalKey);
         else clearKey();
 
         if (ui.syncErrorMsg) {
             let msg = error.message || "Erro desconhecido";
-            if (msg.includes('401')) msg = "Chave Inválida";
+            if (msg.includes('401')) msg = "Chave Inválida ou Não Encontrada";
             ui.syncErrorMsg.textContent = msg;
             ui.syncErrorMsg.classList.remove('hidden');
         }
         setSyncStatus('syncError');
-        _refreshViewState();
+        // Não fechamos a view de entrada para o usuário tentar corrigir a chave
     } finally {
         ui.submitKeyBtn.textContent = originalBtnText;
         _toggleButtons(buttons, false);

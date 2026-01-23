@@ -42,8 +42,6 @@ async function getSyncKeyHash(): Promise<string | null> {
 
     if (cachedHash && lastKeyForHash === key) return cachedHash;
 
-    // CLIENT-SIDE HASHING (Preferred)
-    // Disponível apenas em Contextos Seguros (HTTPS/Localhost)
     if (window.crypto && window.crypto.subtle) {
         try {
             const encoder = new TextEncoder();
@@ -57,13 +55,10 @@ async function getSyncKeyHash(): Promise<string | null> {
             
             return hashHex;
         } catch (e) {
-            console.warn("Crypto Digest failed (Security restrictions?), falling back to raw key", e);
+            console.warn("Crypto Digest failed, falling back to raw key", e);
         }
-    } else {
-        console.warn("Crypto Subtle API unavailable. Using fallback auth.");
     }
 
-    // FALLBACK: Retorna null para sinalizar que devemos usar a estratégia de envio de Chave Bruta
     return null;
 }
 
@@ -78,13 +73,9 @@ export async function apiFetch(endpoint: string, options: RequestInit = {}, incl
 
     if (includeSyncKey) {
         const hash = await getSyncKeyHash();
-        
         if (hash) {
-            // ESTRATÉGIA 1: Hash gerado no cliente (Mais seguro, não trafega a chave bruta)
             headers.set('X-Sync-Key-Hash', hash);
         } else {
-            // ESTRATÉGIA 2 (FALLBACK): Envia chave bruta para hash no servidor
-            // Necessário para ambientes HTTP inseguros ou browsers antigos
             const rawKey = getSyncKey();
             if (rawKey) {
                 headers.set('Authorization', `Bearer ${rawKey}`);
@@ -97,11 +88,11 @@ export async function apiFetch(endpoint: string, options: RequestInit = {}, incl
     const config = {
         ...options,
         headers,
-        keepalive: true
+        // Mantemos keepalive apenas para operações POST rápidas
+        keepalive: options.method === 'POST'
     };
 
     return fetch(endpoint, config);
 }
 
-// Compatibilidade
 export const initAuth = async () => { };

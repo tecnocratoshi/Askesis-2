@@ -31,7 +31,9 @@ const workerCallbacks = new Map<string, { resolve: (val: any) => void, reject: (
 
 function getWorker(): Worker {
     if (!syncWorker) {
+        // REPAIR: Caminho relativo explícito e tratamento de erro de carga
         syncWorker = new Worker('./sync-worker.js', { type: 'module' });
+        
         syncWorker.onmessage = (e) => {
             const { id, status, result, error } = e.data;
             const callback = workerCallbacks.get(id);
@@ -39,53 +41,69 @@ function getWorker(): Worker {
                 if (status === 'success') {
                     callback.resolve(result);
                 } else {
-                    callback.reject(new Error(error));
+                    callback.reject(new Error(error || "Worker Task Failed"));
                 }
                 workerCallbacks.delete(id);
             }
         };
         
         syncWorker.onerror = (e) => {
-            console.error("Critical Worker Error:", e);
-            // REPAIR: Rejeita todas as callbacks pendentes em caso de erro fatal no worker
-            workerCallbacks.forEach((cb) => cb.reject(new Error("Worker error")));
-            workerCallbacks.clear();
+            console.error("CRITICAL: Sync Worker Error", e);
+            // Se o worker morrer, rejeitamos todas as promessas pendentes para destravar a UI
+            workerCallbacks.forEach((cb, id) => {
+                cb.reject(new Error("Worker failed to initialize"));
+                workerCallbacks.delete(id);
+            });
+            syncWorker = null; // Permite tentativa de recriação na próxima tarefa
         };
     }
     return syncWorker;
 }
 
-// --- FIX: Export addSyncLog function to fix missing member error in habitActions.ts ---
 /**
  * Adiciona um log de sincronização ou atividade da IA ao estado global.
  */
 export function addSyncLog(msg: string, type: 'success' | 'error' | 'info', icon?: string) {
-    if (!state.syncLogs) (state as any).syncLogs = [];
+    if (!state.syncLogs) state.syncLogs = [];
     state.syncLogs.unshift({
         time: Date.now(),
         msg,
         type,
         icon
     });
-    // Limita o histórico de logs para evitar estouro de memória/estado
     if (state.syncLogs.length > 50) {
         state.syncLogs.length = 50;
     }
 }
 
+/**
+ * Executa uma tarefa no Web Worker com timeout de segurança.
+ */
 export function runWorkerTask<T>(type: 'encrypt' | 'decrypt' | 'build-ai-prompt' | 'build-quote-analysis-prompt' | 'prune-habit' | 'archive', payload: any, key?: string): Promise<T> {
     return new Promise((resolve, reject) => {
         const id = generateUUID();
-        workerCallbacks.set(id, { resolve, reject });
-        getWorker().postMessage({ id, type, payload, key });
+        const timeoutMs = 15000; // 15 segundos para operações pesadas de criptografia
         
-        // SAFETY TIMEOUT: Se o worker não responder em 30s, cancela para não travar a UI
-        setTimeout(() => {
+        const timeoutId = setTimeout(() => {
             if (workerCallbacks.has(id)) {
-                workerCallbacks.get(id)?.reject(new Error("Worker timeout"));
+                console.warn(`Worker task ${type} timed out after ${timeoutMs}ms`);
                 workerCallbacks.delete(id);
+                reject(new Error("Timeout de processamento (Worker)"));
             }
-        }, 30000);
+        }, timeoutMs);
+
+        workerCallbacks.set(id, { 
+            resolve: (val) => { clearTimeout(timeoutId); resolve(val); }, 
+            reject: (err) => { clearTimeout(timeoutId); reject(err); } 
+        });
+        
+        try {
+            getWorker().postMessage({ id, type, payload, key });
+        } catch (e) {
+            clearTimeout(timeoutId);
+            workerCallbacks.delete(id);
+            reject(e);
+        }
     });
 }
 
@@ -115,7 +133,6 @@ async function resolveConflictWithServerState(serverPayload: ServerPayload) {
     
     const syncKey = getSyncKey();
     if (!syncKey) {
-        console.error("Cannot resolve conflict without sync key.");
         setSyncStatus('syncError');
         return;
     }
@@ -124,10 +141,7 @@ async function resolveConflictWithServerState(serverPayload: ServerPayload) {
         const serverState = await runWorkerTask<AppState>('decrypt', serverPayload.state, syncKey);
         const localState = getPersistableState();
         const mergedState = await mergeStates(localState, serverState);
-        console.log("Smart Merge completed successfully.");
 
-        // REPAIR [2025-06-05]: Passa 'true' para suprimir sincronização imediata do persistStateLocally.
-        // Já faremos a sincronização manual abaixo após atualizar a memória.
         await persistStateLocally(mergedState, true); 
         await loadState(mergedState);
         
@@ -139,19 +153,16 @@ async function resolveConflictWithServerState(serverPayload: ServerPayload) {
         setSyncStatus('syncSynced'); 
         document.dispatchEvent(new CustomEvent('habitsChanged'));
 
-        // Empurra o estado mesclado final de volta para a nuvem para estabilizar
         syncStateWithCloud(mergedState, true);
         
     } catch (error) {
-        console.error("Failed to resolve conflict with server state:", error);
+        console.error("Failed to resolve conflict:", error);
         setSyncStatus('syncError');
     }
 }
 
 async function performSync() {
-    if (isSyncInProgress || !pendingSyncState) {
-        return;
-    }
+    if (isSyncInProgress || !pendingSyncState) return;
 
     isSyncInProgress = true;
     const appState = pendingSyncState;
@@ -160,7 +171,6 @@ async function performSync() {
     const syncKey = getSyncKey();
     if (!syncKey) {
         setSyncStatus('syncError');
-        console.error("Cannot sync without a sync key.");
         isSyncInProgress = false; 
         return;
     }
@@ -182,17 +192,17 @@ async function performSync() {
             const serverPayload: ServerPayload = await response.json();
             await resolveConflictWithServerState(serverPayload);
         } else if (!response.ok) {
-            throw new Error(`Server returned ${response.status}`);
+            // REPAIR: Trata erros 401, 500, etc. que antes eram marcados como "Synced"
+            throw new Error(`Server error: ${response.status}`);
         } else {
             setSyncStatus('syncSynced');
             document.dispatchEvent(new CustomEvent('habitsChanged')); 
         }
     } catch (error) {
-        console.error("Error syncing state to cloud:", error);
+        console.error("Sync failure:", error);
         setSyncStatus('syncError');
     } finally {
         isSyncInProgress = false;
-        
         if (pendingSyncState) {
             if (syncTimeout) clearTimeout(syncTimeout);
             performSync();
@@ -208,9 +218,7 @@ export function syncStateWithCloud(appState: AppState, immediate = false) {
 
     if (syncTimeout) clearTimeout(syncTimeout);
     
-    if (isSyncInProgress) {
-        return;
-    }
+    if (isSyncInProgress) return;
 
     if (immediate) {
         performSync();
@@ -227,6 +235,12 @@ export async function fetchStateFromCloud(): Promise<AppState | undefined> {
 
     try {
         const response = await apiFetch('/api/sync', {}, true);
+        
+        if (!response.ok) {
+            if (response.status === 401) throw new Error("Não autorizado: Chave inválida");
+            throw new Error(`Erro na nuvem: ${response.status}`);
+        }
+
         const data: ServerPayload | null = await response.json();
 
         if (data && data.state) {
@@ -234,15 +248,14 @@ export async function fetchStateFromCloud(): Promise<AppState | undefined> {
             setSyncStatus('syncSynced');
             return appState;
         } else {
-            console.log("No state found in cloud for this sync key. Performing initial sync.");
-            
-            if (state.habits.length > 0 || Object.keys(state.dailyData).length > 0) {
+            if (state.habits.length > 0) {
                 syncStateWithCloud(getPersistableState(), true);
             }
+            setSyncStatus('syncSynced');
             return undefined;
         }
     } catch (error) {
-        console.error("Failed to fetch state from cloud:", error);
+        console.error("Failed to fetch state:", error);
         setSyncStatus('syncError');
         throw error;
     }
