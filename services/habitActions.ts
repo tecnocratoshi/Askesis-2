@@ -1,3 +1,4 @@
+
 /**
  * @license
  * SPDX-License-Identifier: Apache-2.0
@@ -60,8 +61,6 @@ const ActionContext = {
 
 /**
  * Notifica a UI sobre mudanças de dados.
- * FIX [2025-06-05]: clearActiveHabitsCache movido para fora do bloco condicional.
- * Isso garante que novos hábitos apareçam imediatamente sem precisar de reload.
  */
 function _notifyChanges(fullRebuild = false) {
     if (fullRebuild) {
@@ -75,6 +74,9 @@ function _notifyChanges(fullRebuild = false) {
     
     state.uiDirtyState.habitListStructure = state.uiDirtyState.calendarVisuals = true;
     
+    // REPAIR [2025-06-05]: Incrementa o selo temporal para garantir sincronização
+    state.lastModified = Math.max(Date.now(), state.lastModified + 1);
+
     // Libera travas de interação remanescentes
     document.body.classList.remove('is-interaction-active', 'is-dragging-active');
     
@@ -85,6 +87,8 @@ function _notifyChanges(fullRebuild = false) {
 function _notifyPartialUIRefresh(date: string, habitIds: string[]) {
     invalidateCachesForDateChange(date, habitIds);
     state.uiDirtyState.calendarVisuals = true;
+    // REPAIR [2025-06-05]: Incrementa o selo temporal para garantir sincronização
+    state.lastModified = Math.max(Date.now(), state.lastModified + 1);
     saveState();
     ['render-app', 'habitsChanged'].forEach(ev => document.dispatchEvent(new CustomEvent(ev)));
 }
@@ -259,9 +263,6 @@ export function reorderHabit(movedHabitId: string, targetHabitId: string, pos: '
 
 /**
  * Salva o hábito a partir do modal.
- * FIX [2025-06-05]: Invertida a ordem (closeModal ANTES de _notifyChanges).
- * Isso garante que o motor de renderização encontre a UI "desbloqueada" (sem classes de interação)
- * e possa injetar o novo cartão imediatamente.
  */
 export function saveHabitFromModal() {
     if (!state.editingHabit) return;
@@ -456,7 +457,6 @@ function _processAndFormatCelebrations(pendingIds: string[], translationKey: 'ai
     if (pendingIds.length === 0) return '';
     const habitNamesList = pendingIds.map(id => state.habits.find(h => h.id === id)).filter(Boolean).map(h => getHabitDisplayInfo(h!).name);
     const habitNames = formatList(habitNamesList);
-    // --- FIX: Fix typo notifications_shown -> notificationsShown and simplify logic ---
     pendingIds.forEach(id => { 
         const celebrationId = `${id}-${streakMilestone}`; 
         if (!state.notificationsShown.includes(celebrationId)) {

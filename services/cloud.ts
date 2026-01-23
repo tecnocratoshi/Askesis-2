@@ -188,15 +188,16 @@ async function performSync() {
             body: JSON.stringify(payload),
         }, true);
 
-        if (response.status === 409) {
-            const serverPayload: ServerPayload = await response.json();
-            await resolveConflictWithServerState(serverPayload);
-        } else if (!response.ok) {
-            // REPAIR: Trata erros 401, 500, etc. que antes eram marcados como "Synced"
-            throw new Error(`Server error: ${response.status}`);
-        } else {
+        // REPAIR [2025-06-05]: 304 e 200 são sucessos. 
+        // response.ok falha para status 304, por isso a verificação explícita.
+        if (response.status === 200 || response.status === 304) {
             setSyncStatus('syncSynced');
             document.dispatchEvent(new CustomEvent('habitsChanged')); 
+        } else if (response.status === 409) {
+            const serverPayload: ServerPayload = await response.json();
+            await resolveConflictWithServerState(serverPayload);
+        } else {
+            throw new Error(`Server returned status: ${response.status}`);
         }
     } catch (error) {
         console.error("Sync failure:", error);

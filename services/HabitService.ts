@@ -32,30 +32,23 @@ export class HabitService {
      * Esta função grava o clique na memória.
      */
     static setStatus(habitId: string, dateISO: string, time: TimeOfDay, newState: number) {
-        // 1. Inicialização Lazy do Mapa (Segurança)
         if (!state.monthlyLogs) state.monthlyLogs = new Map();
 
         const key = this.getLogKey(habitId, dateISO);
         const day = parseInt(dateISO.substring(8, 10), 10);
         
-        // 2. Matemática Bitwise
         const bitPos = BigInt(((day - 1) * 6) + PERIOD_OFFSET[time]);
-        const clearMask = ~(3n << bitPos); // Cria buraco (00) na posição
+        const clearMask = ~(3n << bitPos); 
         
-        // 3. Leitura e Modificação
         let currentLog = state.monthlyLogs.get(key) || 0n;
         const newLog = (currentLog & clearMask) | (BigInt(newState) << bitPos);
         
-        // 4. Gravação
         state.monthlyLogs.set(key, newLog);
-        
-        // 5. Flag de Sujeira (Avisa Persistence e Charts que algo mudou)
         state.uiDirtyState.chartData = true;
     }
 
     /**
      * Serialização para JSON (Exportação/Cloud)
-     * Converte Map<BigInt> para Array de Strings Hexadecimais
      */
     static serializeLogsForCloud(): [string, string][] {
         if (!state.monthlyLogs) return [];
@@ -66,14 +59,12 @@ export class HabitService {
 
     /**
      * Deserialização (Importação/Cloud)
-     * Converte Hex Strings de volta para Map<BigInt>
      */
     static deserializeLogsFromCloud(serialized: [string, string][]) {
         if (!Array.isArray(serialized)) return;
         const map = new Map<string, bigint>();
         serialized.forEach(([key, hexVal]) => {
             try {
-                // Suporta formato "0x..." e "..." puro
                 const hexClean = hexVal.startsWith("0x") ? hexVal : "0x" + hexVal;
                 map.set(key, BigInt(hexClean));
             } catch (e) {
@@ -84,7 +75,7 @@ export class HabitService {
     }
     
     /**
-     * Suporte Legado (Migração de ArrayBuffer antigo se houver)
+     * Suporte Legado (Migração de ArrayBuffer antigo)
      */
     static unpackBinaryLogs(binaryMap: Map<string, ArrayBuffer>) {
         if (!state.monthlyLogs) state.monthlyLogs = new Map();
@@ -92,7 +83,7 @@ export class HabitService {
             try {
                 const view = new DataView(buffer);
                 if (buffer.byteLength >= 8) {
-                    state.monthlyLogs!.set(key, view.getBigUint64(0, true)); // Little Endian
+                    state.monthlyLogs!.set(key, view.getBigUint64(0, true));
                 }
             } catch (e) {
                 console.warn("Falha na migração binária legada", e);
@@ -102,9 +93,7 @@ export class HabitService {
 
     /**
      * INTELLIGENT MERGE (CRDT-Lite para Bitmasks)
-     * Funde dois mapas de logs.
-     * REFIX [2025-06-05]: Usando operação bitwise OR para que marcações em dispositivos diferentes 
-     * se somem deterministicamente em vez de um dispositivo sobrescrever o outro.
+     * Funde dois mapas de logs usando bitwise OR para acumular estados de conclusão.
      */
     static mergeLogs(winnerMap: Map<string, bigint> | undefined, loserMap: Map<string, bigint> | undefined): Map<string, bigint> {
         const result = new Map<string, bigint>(winnerMap || []);
@@ -112,45 +101,8 @@ export class HabitService {
 
         for (const [key, loserVal] of loserMap.entries()) {
             const winnerVal = result.get(key) || 0n;
-            // O OR bitwise funde os estados de conclusão de todos os períodos do mês.
-            // Ex: Se o perdedor tem registro na Manhã e o vencedor na Noite, o resultado tem ambos.
             result.set(key, winnerVal | loserVal);
         }
         return result;
-    }
-
-    /**
-     * FORCE DAY SYNC (Prioridade Absoluta para Data Específica)
-     * Transplanta os bits de um dia específico da 'sourceMap' (Cloud) para 'targetMap' (Local/Merged).
-     * Isso garante que "Hoje" esteja exatamente igual à nuvem, ignorando timestamps locais.
-     */
-    static overwriteDayBits(targetMap: Map<string, bigint>, sourceMap: Map<string, bigint> | undefined, dateISO: string) {
-        if (!sourceMap) return;
-        
-        // Itera sobre todos os hábitos na fonte (Nuvem) que têm registro para este mês
-        const monthSuffix = dateISO.substring(0, 7); // YYYY-MM
-        const day = parseInt(dateISO.substring(8, 10), 10);
-        
-        // Calcula a máscara do dia (todos os 3 períodos: Manhã, Tarde, Noite)
-        // Cada período usa 2 bits. Total 6 bits por dia.
-        // Posição inicial: (dia - 1) * 6
-        const startBit = BigInt((day - 1) * 6);
-        const dayMask = (3n << startBit) | (3n << (startBit + 2n)) | (3n << (startBit + 4n));
-        const clearMask = ~dayMask;
-
-        for (const [key, sourceVal] of sourceMap.entries()) {
-            if (key.endsWith(monthSuffix)) {
-                // Extrai os bits do dia da nuvem
-                const sourceDayBits = sourceVal & dayMask;
-                
-                // Pega o valor atual local (ou 0 se não existir)
-                const currentLocalVal = targetMap.get(key) || 0n;
-                
-                // Limpa os bits do dia no local e injeta os bits da nuvem
-                const newVal = (currentLocalVal & clearMask) | sourceDayBits;
-                
-                targetMap.set(key, newVal);
-            }
-        }
     }
 }

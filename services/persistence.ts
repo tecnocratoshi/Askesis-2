@@ -1,3 +1,4 @@
+
 /**
  * @license
  * SPDX-License-Identifier: Apache-2.0
@@ -80,6 +81,10 @@ function pruneOrphanedDailyData(habits: readonly Habit[], dailyData: Record<stri
 
 // Internal save with suppression support
 async function saveStateInternal(immediate = false, suppressSync = false) {
+    // REPAIR [2025-06-05]: Garante que lastModified seja estritamente crescente.
+    // Isso evita que o servidor receba timestamps idênticos e retorne 304.
+    state.lastModified = Math.max(Date.now(), state.lastModified + 1);
+
     const structuredData = getPersistableState();
     try {
         await saveSplitState(structuredData, state.monthlyLogs);
@@ -90,8 +95,6 @@ async function saveStateInternal(immediate = false, suppressSync = false) {
     // LOOP PROTECTION: Only trigger sync if NOT suppressed
     if (!suppressSync) {
         syncHandler?.(structuredData, immediate);
-    } else {
-        console.log("[Persistence] Sync suppressed for this save.");
     }
 }
 

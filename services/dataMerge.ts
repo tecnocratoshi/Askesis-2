@@ -18,21 +18,22 @@ import { getTodayUTCIso } from '../utils';
  */
 function hydrateLogs(state: AppState) {
     if (state.monthlyLogs && !(state.monthlyLogs instanceof Map)) {
-        // Se for um array de entradas (standard Map serialization) ou um objeto plano
         const entries = Array.isArray(state.monthlyLogs) 
             ? state.monthlyLogs 
             : Object.entries(state.monthlyLogs);
             
         const map = new Map<string, bigint>();
         entries.forEach((item: any) => {
-            // Suporta [key, value] (Array) ou {key, value} (Object entries)
             const key = Array.isArray(item) ? item[0] : item[0];
             const val = Array.isArray(item) ? item[1] : item[1];
             
             try {
-                // Tenta converter para BigInt se não for um.
-                // Aceita BigInt nativo, strings numéricas ou hex "0x..."
-                map.set(key, typeof val === 'bigint' ? val : BigInt(val));
+                // Aceita BigInt nativo, strings numéricas ou objetos de transporte
+                if (val && typeof val === 'object' && val.__type === 'bigint') {
+                    map.set(key, BigInt(val.val));
+                } else {
+                    map.set(key, typeof val === 'bigint' ? val : BigInt(val));
+                }
             } catch(e) {
                 console.warn(`[Merge] Failed to hydrate bitmask for ${key}:`, val);
             }
@@ -42,7 +43,7 @@ function hydrateLogs(state: AppState) {
 }
 
 /**
- * Mescla registros diários.
+ * Mescla registros diários (Notas e Overrides).
  */
 function mergeDayRecord(source: Record<string, HabitDailyInfo>, target: Record<string, HabitDailyInfo>, preserveNotes = true) {
     for (const habitId in source) {
@@ -53,7 +54,6 @@ function mergeDayRecord(source: Record<string, HabitDailyInfo>, target: Record<s
 
         const sourceHabitData = source[habitId];
         const targetHabitData = target[habitId];
-
         const sourceInstances = sourceHabitData.instances || {};
         const targetInstances = targetHabitData.instances || {};
 
@@ -69,12 +69,14 @@ function mergeDayRecord(source: Record<string, HabitDailyInfo>, target: Record<s
                 if (preserveNotes) {
                     const sNoteLen = srcInst.note ? srcInst.note.length : 0;
                     const tNoteLen = tgtInst.note ? tgtInst.note.length : 0;
-                    
-                    if ((!srcInst.note && tgtInst.note) || (tgtInst.note && tNoteLen > sNoteLen)) {
-                        srcInst.note = tgtInst.note;
+                    if (sNoteLen > tNoteLen) {
+                        tgtInst.note = srcInst.note;
                     }
                 }
-                targetInstances[time as any] = srcInst;
+                // Mescla overrides se existirem
+                if (srcInst.goalOverride !== undefined) {
+                    tgtInst.goalOverride = srcInst.goalOverride;
+                }
             }
         }
         
@@ -112,18 +114,9 @@ export async function mergeStates(local: AppState, incoming: AppState): Promise<
         if (!merged.dailyData[date]) {
             (merged.dailyData as any)[date] = loser.dailyData[date];
         } else {
-            if (date !== todayISO) {
-                mergeDayRecord(loser.dailyData[date], (merged.dailyData as any)[date]);
-            }
+            // Mescla dados granulares (notas)
+            mergeDayRecord(loser.dailyData[date], (merged.dailyData as any)[date], true);
         }
-    }
-
-    // PRIORIDADE ABSOLUTA PARA HOJE (Cloud Wins)
-    if (incoming.dailyData[todayISO]) {
-        if (!merged.dailyData[todayISO]) {
-            (merged.dailyData as any)[todayISO] = {};
-        }
-        mergeDayRecord(incoming.dailyData[todayISO], (merged.dailyData as any)[todayISO], true);
     }
 
     // 4. Archives Union
@@ -136,20 +129,14 @@ export async function mergeStates(local: AppState, incoming: AppState): Promise<
         }
     }
     
-    // 5. Monthly Logs (Bitmasks)
+    // 5. Monthly Logs (Bitmasks) - OPERAÇÃO CRÍTICA
+    // Funde logs acumulativamente usando bitwise OR. 
+    // REPAIR: Removemos overwrites destrutivos de data específica.
     merged.monthlyLogs = HabitService.mergeLogs(winner.monthlyLogs, loser.monthlyLogs);
     
-    // FORCE TODAY BITMASK FROM CLOUD
-    if (incoming.monthlyLogs) {
-        HabitService.overwriteDayBits(merged.monthlyLogs, incoming.monthlyLogs, todayISO);
-    }
-
     // 6. Time Integrity
     const now = Date.now();
-    merged.lastModified = Math.max(localTs, incomingTs, now);
-    if (merged.lastModified === Math.max(localTs, incomingTs)) {
-        merged.lastModified += 1;
-    }
+    merged.lastModified = Math.max(localTs, incomingTs, now) + 1;
 
     // Meta Data Merge
     // @ts-ignore
