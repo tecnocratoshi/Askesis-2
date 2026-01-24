@@ -4,12 +4,24 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+/**
+ * @file services/HabitService.ts
+ * @description Motor de Operações Binárias para Logs de Hábitos.
+ */
+
 import { state, PERIOD_OFFSET, TimeOfDay } from '../state';
 
 export class HabitService {
 
     private static getLogKey(habitId: string, dateISO: string): string {
         return `${habitId}_${dateISO.substring(0, 7)}`; // ID_YYYY-MM
+    }
+
+    /**
+     * Valida se um valor BigInt é um log de bitmask válido para um mês.
+     */
+    static isValidLog(val: any): val is bigint {
+        return typeof val === 'bigint';
     }
 
     /**
@@ -21,6 +33,7 @@ export class HabitService {
         
         if (log !== undefined) {
             const day = parseInt(dateISO.substring(8, 10), 10);
+            // 6 bits por dia (2 bits por período: Morning, Afternoon, Evening)
             const bitPos = BigInt(((day - 1) * 6) + PERIOD_OFFSET[time]);
             return Number((log >> bitPos) & 3n);
         }
@@ -28,7 +41,7 @@ export class HabitService {
     }
 
     /**
-     * [CRÍTICO] Escrita Otimizada (Bitmask Only)
+     * Escrita Otimizada (Bitmask Only)
      */
     static setStatus(habitId: string, dateISO: string, time: TimeOfDay, newState: number) {
         if (!state.monthlyLogs) state.monthlyLogs = new Map();
@@ -47,14 +60,12 @@ export class HabitService {
     }
 
     /**
-     * Serialização para JSON (Exportação/Cloud)
+     * Serialização para Transporte/Cloud (Strings Hex para JSON safety)
      */
     static serializeLogsForCloud(): [string, string][] {
         if (!state.monthlyLogs) return [];
         return Array.from(state.monthlyLogs.entries()).map(([key, val]) => {
-            // Garante o prefixo 0x para que o Worker reviver reconheça como BigInt
-            const hex = val.toString(16);
-            return [key, "0x" + hex] as [string, string];
+            return [key, "0x" + val.toString(16)] as [string, string];
         });
     }
 
@@ -69,31 +80,15 @@ export class HabitService {
                 const hexClean = hexVal.startsWith("0x") ? hexVal : "0x" + hexVal;
                 map.set(key, BigInt(hexClean));
             } catch (e) {
-                console.warn(`[HabitService] Skipping invalid hex log: ${key}`, e);
+                console.warn(`[HabitService] Skipping invalid hex log: ${key}`);
             }
         });
         state.monthlyLogs = map;
     }
     
     /**
-     * Suporte Legado (Migração de ArrayBuffer antigo)
-     */
-    static unpackBinaryLogs(binaryMap: Map<string, ArrayBuffer>) {
-        if (!state.monthlyLogs) state.monthlyLogs = new Map();
-        binaryMap.forEach((buffer, key) => {
-            try {
-                const view = new DataView(buffer);
-                if (buffer.byteLength >= 8) {
-                    state.monthlyLogs!.set(key, view.getBigUint64(0, true));
-                }
-            } catch (e) {
-                console.warn("Falha na migração binária legada", e);
-            }
-        });
-    }
-
-    /**
      * INTELLIGENT MERGE (CRDT-Lite para Bitmasks)
+     * Mantém conclusões de ambos os lados (União Binária).
      */
     static mergeLogs(winnerMap: Map<string, bigint> | undefined, loserMap: Map<string, bigint> | undefined): Map<string, bigint> {
         const result = new Map<string, bigint>(winnerMap || []);
@@ -104,5 +99,13 @@ export class HabitService {
             result.set(key, winnerVal | loserVal);
         }
         return result;
+    }
+
+    /**
+     * Limpa todos os logs binários (Reseta histórico binário).
+     */
+    static clearAllLogs() {
+        state.monthlyLogs = new Map();
+        state.uiDirtyState.chartData = true;
     }
 }

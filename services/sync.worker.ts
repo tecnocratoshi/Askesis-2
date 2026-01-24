@@ -4,6 +4,11 @@
  * SPDX-License-Identifier: Apache-2.0
 */
 
+/**
+ * @file services/sync.worker.ts
+ * @description Web Worker para Criptografia e Processamento de Dados Pesados.
+ */
+
 const SALT_LEN = 16;
 const IV_LEN = 12;
 
@@ -18,7 +23,6 @@ function jsonReviver(key: string, value: any) {
         if (value.__type === 'bigint') return BigInt(value.val);
         if (value.__type === 'map') return new Map(value.val);
     }
-    // Suporte para strings hexadecimais prefixadas com 0x (HabitService style)
     if (typeof value === 'string' && value.startsWith('0x')) {
         try { return BigInt(value); } catch(e) { return value; }
     }
@@ -59,35 +63,75 @@ async function decrypt(encryptedBase64: string, password: string): Promise<any> 
     return JSON.parse(new TextDecoder().decode(decrypted), jsonReviver);
 }
 
-self.onmessage = async (e) => {
-    const { id, type, payload, key } = e.data;
-    try {
-        let result: any;
-        switch (type) {
-            case 'encrypt': result = await encrypt(payload, key!); break;
-            case 'decrypt': result = await decrypt(payload, key!); break;
-            case 'build-ai-prompt': result = buildAiPrompt(payload); break;
-            case 'build-quote-analysis-prompt': result = buildAiQuoteAnalysisPrompt(payload); break;
-            case 'archive': result = await archiveDailyData(payload); break;
-            case 'prune-habit': result = payload.archives; break;
-            default: throw new Error(`Unknown: ${type}`);
+/**
+ * Decodifica métricas de um log binário (hex) para um período específico.
+ */
+function decodeMetricsFromHex(hex: string, todayISO: string) {
+    const log = BigInt(hex);
+    let completed = 0;
+    let totalPotential = 0;
+    let currentStreak = 0;
+    
+    // Analisa os últimos 30 dias de bits
+    for (let i = 0; i < 30; i++) {
+        const bitPosBase = i * 6;
+        let dayHasDone = false;
+        
+        // Verifica Morning (0), Afternoon (2), Evening (4)
+        for (let offset of [0, 2, 4]) {
+            const status = Number((log >> BigInt(bitPosBase + offset)) & 3n);
+            if (status === 1 || status === 3) {
+                completed++;
+                dayHasDone = true;
+            }
+            if (status !== 0) totalPotential++;
         }
-        self.postMessage({ id, status: 'success', result });
-    } catch (error: any) {
-        self.postMessage({ id, status: 'error', error: error.message });
+        
+        if (dayHasDone) currentStreak++;
+        else if (i > 0) break; // Streak quebrado
     }
-};
+
+    return { 
+        successRate: totalPotential > 0 ? Math.round((completed / totalPotential) * 100) : 0,
+        streak: currentStreak 
+    };
+}
 
 function buildAiPrompt(data: any) {
-    const { habits, dailyData, translations, languageName } = data;
+    const { habits, dailyData, translations, languageName, monthlyLogsSerialized, todayISO } = data;
+    
+    // Reconstrói Map de logs para consulta rápida
+    const logsMap = new Map<string, string>(monthlyLogsSerialized || []);
+    
     let details = "";
     habits.forEach((h: any) => {
         if (h.graduatedOn) return;
-        const name = h.scheduleHistory[h.scheduleHistory.length-1].name || translations[h.scheduleHistory[h.scheduleHistory.length-1].nameKey];
-        details += `- ${name}\n`;
+        
+        // Busca métricas decodificadas
+        const logKey = `${h.id}_${todayISO.substring(0, 7)}`;
+        const hex = logsMap.get(logKey);
+        const metrics = hex ? decodeMetricsFromHex(hex, todayISO) : { successRate: 0, streak: 0 };
+
+        const lastSchedule = h.scheduleHistory[h.scheduleHistory.length - 1];
+        const name = lastSchedule.name || translations[lastSchedule.nameKey] || "Hábito";
+        
+        details += translations.aiPromptHabitDetails
+            .replace('{habitName}', name)
+            .replace('{streak}', metrics.streak.toString())
+            .replace('{successRate}', metrics.successRate.toString())
+            .replace('{virtue}', translations[`stoicVirtue${lastSchedule.philosophy?.virtue || 'Wisdom'}`])
+            .replace('{discipline}', translations[`stoicDiscipline${lastSchedule.philosophy?.discipline || 'Action'}`])
+            .replace('{sphere}', translations[`governanceSphere${lastSchedule.philosophy?.sphere || 'Mental'}`]);
+        details += "\n";
     });
+
     return {
-        prompt: translations.promptTemplate.replace('{activeHabitDetails}', details).replace('{history}', JSON.stringify(dailyData)),
+        prompt: translations.promptTemplate
+            .replace('{activeHabitDetails}', details)
+            .replace('{history}', JSON.stringify(dailyData))
+            .replace('{aiPeriodHistorical}', translations.aiPeriodHistorical)
+            .replace('{graduatedHabitsSection}', "")
+            .replace('{notesSection}', ""),
         systemInstruction: translations.aiSystemInstruction.replace('{languageName}', languageName)
     };
 }
@@ -99,10 +143,56 @@ function buildAiQuoteAnalysisPrompt(data: any) {
     };
 }
 
-async function archiveDailyData(payload: any) {
-    const result: Record<string, any> = {};
+function processArchiving(payload: any) {
+    const result: Record<string, string> = {};
     for (const year in payload) {
-        result[year] = { ...payload[year].base, ...payload[year].additions };
+        let base = payload[year].base || {};
+        if (typeof base === 'string') {
+            try { base = JSON.parse(base); } catch { base = {}; }
+        }
+        const merged = { ...base, ...payload[year].additions };
+        result[year] = JSON.stringify(merged);
     }
     return result;
+}
+
+self.onmessage = async (e) => {
+    const { id, type, payload, key } = e.data;
+    try {
+        let result: any;
+        switch (type) {
+            case 'encrypt': result = await encrypt(payload, key!); break;
+            case 'decrypt': result = await decrypt(payload, key!); break;
+            case 'build-ai-prompt': result = buildAiPrompt(payload); break;
+            case 'build-quote-analysis-prompt': result = buildAiQuoteAnalysisPrompt(payload); break;
+            case 'archive': result = processArchiving(payload); break;
+            case 'prune-habit': result = pruneHabitFromArchives(payload.habitId, payload.archives); break;
+            default: throw new Error(`Task unknown: ${type}`);
+        }
+        self.postMessage({ id, status: 'success', result });
+    } catch (error: any) {
+        self.postMessage({ id, status: 'error', error: error.message });
+    }
+};
+
+function pruneHabitFromArchives(habitId: string, archives: Record<string, any>): Record<string, any> {
+    const updated: Record<string, any> = {};
+    for (const year in archives) {
+        let content = archives[year];
+        if (typeof content === 'string') {
+            try { content = JSON.parse(content); } catch { continue; }
+        }
+        let changed = false;
+        for (const date in content) {
+            if (content[date][habitId]) {
+                delete content[date][habitId];
+                changed = true;
+            }
+            if (Object.keys(content[date]).length === 0) delete content[date];
+        }
+        if (changed) {
+            updated[year] = Object.keys(content).length === 0 ? "" : JSON.stringify(content);
+        }
+    }
+    return updated;
 }

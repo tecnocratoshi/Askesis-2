@@ -9,15 +9,7 @@
  * @description Definição do Estado Global e Estruturas de Dados (Single Source of Truth).
  */
 
-import { addDays, getTodayUTC, getTodayUTCIso, decompressString, decompressFromBuffer } from './utils';
-
-// --- ERROR TYPES ---
-export class DataLoadingError extends Error {
-    constructor(message: string) {
-        super(message);
-        this.name = "DataLoadingError";
-    }
-}
+import { getTodayUTCIso } from './utils';
 
 // --- TYPES & INTERFACES ---
 
@@ -77,23 +69,6 @@ export interface HabitSchedule {
     readonly scheduleAnchor: string;
 }
 
-export interface HabitTemplate {
-    readonly icon: string;
-    readonly color: string;
-    readonly times: readonly TimeOfDay[];
-    readonly goal: HabitGoal;
-    readonly frequency: Frequency;
-    readonly name?: string;
-    readonly nameKey?: string;
-    readonly subtitle?: string;
-    readonly subtitleKey?: string;
-    readonly philosophy?: HabitPhilosophy;
-}
-
-export interface PredefinedHabit extends HabitTemplate {
-    readonly isDefault?: boolean;
-}
-
 export interface Habit {
     readonly id: string;
     createdOn: string; 
@@ -120,40 +95,73 @@ export interface SyncLog {
     icon?: string; 
 }
 
-export interface DaySummary {
-    readonly total: number;
-    readonly completed: number;
-    readonly snoozed: number;
-    readonly pending: number;
-    readonly completedPercent: number;
-    readonly snoozedPercent: number;
-    readonly showPlusIndicator: boolean;
-}
-
-// --- BITMASK STRUCTURES ---
-export const PERIOD_OFFSET = { Morning: 0, Afternoon: 2, Evening: 4 } as const;
-export const HABIT_STATE = { NULL: 0, DONE: 1, DEFERRED: 2, DONE_PLUS: 3 } as const;
-
 export interface AppState {
     readonly version: number;
     lastModified: number; 
     readonly habits: readonly Habit[];
-    readonly dailyData: Readonly<Record<string, Readonly<Record<string, HabitDailyInfo>>>>;
-    readonly archives: Readonly<Record<string, string | Uint8Array>>; 
-    readonly dailyDiagnoses: Readonly<Record<string, DailyStoicDiagnosis>>;
-    readonly notificationsShown: readonly string[];
-    readonly pending21DayHabitIds: readonly string[];
-    readonly pendingConsolidationHabitIds: readonly string[];
+    readonly dailyData: Record<string, Record<string, HabitDailyInfo>>;
+    readonly archives: Record<string, string | Uint8Array>; 
+    readonly dailyDiagnoses: Record<string, DailyStoicDiagnosis>;
+    readonly notificationsShown: string[];
+    readonly pending21DayHabitIds: string[];
+    readonly pendingConsolidationHabitIds: string[];
     readonly quoteState?: QuoteDisplayState;
     readonly hasOnboarded: boolean; 
     readonly syncLogs: SyncLog[];
-    monthlyLogs?: Map<string, bigint>;
+    monthlyLogs: Map<string, bigint>; // Bitmask Storage (Solução 3)
+}
+
+/**
+ * @fix Added HabitTemplate and PredefinedHabit interfaces
+ */
+export interface HabitTemplate {
+    icon: string;
+    color: string;
+    times: TimeOfDay[];
+    goal: HabitGoal;
+    frequency: Frequency;
+    name?: string;
+    nameKey?: string;
+    subtitleKey?: string;
+    philosophy?: HabitPhilosophy;
+}
+
+export interface PredefinedHabit extends HabitTemplate {
+    nameKey: string;
+    subtitleKey: string;
+    isDefault?: boolean;
 }
 
 // --- CONSTANTS ---
-export const APP_VERSION = 7; 
+export const APP_VERSION = 8; 
 export const STREAK_SEMI_CONSOLIDATED = 21;
 export const STREAK_CONSOLIDATED = 66;
+
+/**
+ * @fix Added HABIT_STATE and PERIOD_OFFSET constants
+ */
+export const HABIT_STATE = {
+    NULL: 0,
+    DONE: 1,
+    DEFERRED: 2,
+    DONE_PLUS: 3
+} as const;
+
+export const PERIOD_OFFSET: Record<TimeOfDay, number> = {
+    'Morning': 0,
+    'Afternoon': 2,
+    'Evening': 4
+};
+
+/**
+ * @fix Added FREQUENCIES and STREAK_LOOKBACK_DAYS constants
+ */
+export const FREQUENCIES: { labelKey: string, value: Frequency }[] = [
+    { labelKey: 'freqDaily', value: { type: 'daily' } },
+    { labelKey: 'freqSpecificDaysOfWeek', value: { type: 'specific_days_of_week', days: [] } },
+    { labelKey: 'freqEvery', value: { type: 'interval', unit: 'days', amount: 2 } }
+];
+
 export const STREAK_LOOKBACK_DAYS = 730;
 
 export const TIMES_OF_DAY = ['Morning', 'Afternoon', 'Evening'] as const;
@@ -165,15 +173,6 @@ export const LANGUAGES = [
     { code: 'es', nameKey: 'langSpanish' }
 ] as const;
 export type Language = typeof LANGUAGES[number];
-
-export const FREQUENCIES = [
-    { labelKey: 'freqDaily', value: { type: 'daily' } },
-    { labelKey: 'freqEvery', value: { type: 'interval', unit: 'days', amount: 2 } },
-    { labelKey: 'freqSpecificDaysOfWeek', value: { type: 'specific_days_of_week', days: [] } }
-] as const;
-
-const _createMonomorphicDailyInfo = (): HabitDailyInfo => ({ instances: {}, dailySchedule: undefined });
-const _createMonomorphicInstance = (): HabitDayData => ({ goalOverride: undefined, note: undefined });
 
 // --- APPLICATION STATE ---
 export const state: {
@@ -187,8 +186,10 @@ export const state: {
     habitAppearanceCache: Map<string, Map<string, boolean>>;
     scheduleCache: Map<string, Map<string, HabitSchedule | null>>;
     activeHabitsCache: Map<string, Array<{ habit: Habit; schedule: TimeOfDay[] }>>;
-    daySummaryCache: Map<string, DaySummary>;
-    calendarDates: Date[];
+    /**
+     * @fix Added daySummaryCache
+     */
+    daySummaryCache: Map<string, any>;
     selectedDate: string;
     activeLanguageCode: Language['code'];
     pending21DayHabitIds: string[];
@@ -196,24 +197,30 @@ export const state: {
     notificationsShown: string[];
     hasOnboarded: boolean; 
     syncLogs: SyncLog[];
-    confirmAction: (() => void) | null;
-    confirmEditAction: (() => void) | null;
-    editingNoteFor: { habitId: string; date: string; time: TimeOfDay; } | null;
-    editingHabit: any | null;
     quoteState?: QuoteDisplayState;
     aiState: 'idle' | 'loading' | 'completed' | 'error';
     aiReqId: number;
     hasSeenAIResult: boolean;
     lastAIResult: string | null;
-    lastAIError: string | null;
+    /**
+     * @fix Added lastAIError
+     */
+    lastAIError?: string;
     syncState: 'syncInitial' | 'syncSaving' | 'syncSynced' | 'syncError';
-    syncLastError: string | null;
     fullCalendar: { year: number; month: number; };
     uiDirtyState: { calendarVisuals: boolean; habitListStructure: boolean; chartData: boolean; };
     monthlyLogs: Map<string, bigint>;
+    /**
+     * @fix Added editingHabit, confirmAction, confirmEditAction, editingNoteFor, and calendarDates
+     */
+    editingHabit?: { isNew: boolean; habitId?: string; originalData?: any; formData: HabitTemplate; targetDate: string };
+    confirmAction: (() => void) | null;
+    confirmEditAction: (() => void) | null;
+    editingNoteFor: { habitId: string; date: string; time: TimeOfDay } | null;
+    calendarDates: string[];
 } = {
     habits: [],
-    lastModified: Date.now(),
+    lastModified: 0,
     dailyData: {},
     archives: {},
     dailyDiagnoses: {},
@@ -223,7 +230,6 @@ export const state: {
     scheduleCache: new Map(),
     activeHabitsCache: new Map(),
     daySummaryCache: new Map(),
-    calendarDates: [],
     selectedDate: getTodayUTCIso(),
     activeLanguageCode: 'pt',
     pending21DayHabitIds: [],
@@ -231,46 +237,23 @@ export const state: {
     notificationsShown: [],
     hasOnboarded: false,
     syncLogs: [],
-    confirmAction: null,
-    confirmEditAction: null,
-    editingNoteFor: null,
-    editingHabit: null,
     aiState: 'idle',
     aiReqId: 0,
     hasSeenAIResult: true,
     lastAIResult: null,
-    lastAIError: null,
     syncState: 'syncInitial',
-    syncLastError: null,
     fullCalendar: { year: new Date().getUTCFullYear(), month: new Date().getUTCMonth() },
     uiDirtyState: { calendarVisuals: true, habitListStructure: true, chartData: true },
-    monthlyLogs: new Map()
+    monthlyLogs: new Map(),
+    confirmAction: null,
+    confirmEditAction: null,
+    editingNoteFor: null,
+    calendarDates: []
 };
 
-// --- STATE ACCESSORS & MUTATORS ---
-
-export function getHabitDailyInfoForDate(dateISO: string): Record<string, HabitDailyInfo> {
-    return state.dailyData[dateISO] || {};
-}
-
-export function ensureHabitDailyInfo(dateISO: string, habitId: string): HabitDailyInfo {
-    if (!state.dailyData[dateISO]) {
-        state.dailyData[dateISO] = {};
-    }
-    if (!state.dailyData[dateISO][habitId]) {
-        state.dailyData[dateISO][habitId] = _createMonomorphicDailyInfo();
-    }
-    return state.dailyData[dateISO][habitId];
-}
-
-export function ensureHabitInstanceData(dateISO: string, habitId: string, time: TimeOfDay): HabitDayData {
-    const dailyInfo = ensureHabitDailyInfo(dateISO, habitId);
-    if (!dailyInfo.instances[time]) {
-        dailyInfo.instances[time] = _createMonomorphicInstance();
-    }
-    return dailyInfo.instances[time]!;
-}
-
+/**
+ * Extrai o estado atual para um formato serializável (JSON-safe para sync).
+ */
 export function getPersistableState(): AppState {
     return {
         version: APP_VERSION,
@@ -289,35 +272,55 @@ export function getPersistableState(): AppState {
     };
 }
 
-// --- CACHE MANAGEMENT ---
-
-export function clearScheduleCache() {
-    state.scheduleCache.clear();
-    state.habitAppearanceCache.clear();
-}
-
 export function clearActiveHabitsCache() {
     state.activeHabitsCache.clear();
 }
 
-export function invalidateCachesForDateChange(dateISO: string, habitIds: string[]) {
-    state.daySummaryCache.delete(dateISO);
-    state.activeHabitsCache.delete(dateISO);
-    habitIds.forEach(id => {
-        state.streaksCache.get(id)?.clear();
-        state.habitAppearanceCache.get(id)?.clear();
-    });
-    state.uiDirtyState.chartData = true;
+/**
+ * @fix Added exported members getHabitDailyInfoForDate, ensureHabitDailyInfo, ensureHabitInstanceData, clearScheduleCache, invalidateCachesForDateChange, isDateLoading, isChartDataDirty, invalidateChartCache
+ */
+export function getHabitDailyInfoForDate(dateISO: string): Record<string, HabitDailyInfo> {
+    if (!state.dailyData[dateISO]) {
+        state.dailyData[dateISO] = {};
+    }
+    return state.dailyData[dateISO];
 }
 
-export function invalidateChartCache() {
-    state.uiDirtyState.chartData = true;
+export function ensureHabitDailyInfo(dateISO: string, habitId: string): HabitDailyInfo {
+    const dayData = getHabitDailyInfoForDate(dateISO);
+    if (!dayData[habitId]) {
+        dayData[habitId] = { instances: {}, dailySchedule: undefined };
+    }
+    return dayData[habitId];
+}
+
+export function ensureHabitInstanceData(dateISO: string, habitId: string, time: TimeOfDay): HabitDayData {
+    const habitInfo = ensureHabitDailyInfo(dateISO, habitId);
+    if (!habitInfo.instances[time]) {
+        habitInfo.instances[time] = {};
+    }
+    return habitInfo.instances[time]!;
+}
+
+export function clearScheduleCache() {
+    state.scheduleCache.clear();
+}
+
+export function invalidateCachesForDateChange(dateISO: string, habitIds: string[]) {
+    state.daySummaryCache.delete(dateISO);
+    state.streaksCache.forEach((cache) => cache.delete(dateISO));
+    state.habitAppearanceCache.forEach((cache) => cache.delete(dateISO));
+    state.scheduleCache.forEach((cache) => cache.delete(dateISO));
+}
+
+export function isDateLoading(dateISO: string): boolean {
+    return false;
 }
 
 export function isChartDataDirty(): boolean {
     return state.uiDirtyState.chartData;
 }
 
-export function isDateLoading(dateISO: string): boolean {
-    return false;
+export function invalidateChartCache() {
+    state.uiDirtyState.chartData = true;
 }

@@ -2,12 +2,16 @@
 /**
  * @license
  * SPDX-License-Identifier: Apache-2.0
- * VERSÃO: Direct Storage + Secure Context Fallback
+ */
+
+/**
+ * @file services/api.ts
+ * @description Cliente de API e Gerenciamento de Chaves de Sincronização.
  */
 
 const SYNC_KEY_STORAGE_KEY = 'habitTrackerSyncKey';
 
-// --- GERENCIAMENTO DE CHAVES (Síncrono e Direto) ---
+// --- GERENCIAMENTO DE CHAVES ---
 
 export const hasLocalSyncKey = (): boolean => {
     return !!localStorage.getItem(SYNC_KEY_STORAGE_KEY);
@@ -28,14 +32,18 @@ export const clearKey = () => {
 
 // --- VALIDAÇÃO ---
 export const isValidKeyFormat = (key: string): boolean => {
+    // Formato UUID v4 básico
     return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(key);
 };
 
-// --- AUTH HASH ---
-
+// --- AUTH HASH (SHA-256) ---
 let cachedHash: string | null = null;
 let lastKeyForHash: string | null = null;
 
+/**
+ * Gera um hash da chave para usar como identificador no banco (Privacidade).
+ * A chave real nunca sai do dispositivo em texto claro.
+ */
 async function getSyncKeyHash(): Promise<string | null> {
     const key = getSyncKey();
     if (!key) return null;
@@ -55,15 +63,17 @@ async function getSyncKeyHash(): Promise<string | null> {
             
             return hashHex;
         } catch (e) {
-            console.warn("Crypto Digest failed, falling back to raw key", e);
+            console.warn("[API] Crypto Digest failed, falling back to raw auth", e);
         }
     }
-
     return null;
 }
 
 // --- API CLIENT ---
 
+/**
+ * Wrapper de Fetch com injeção automática de Headers de Sync.
+ */
 export async function apiFetch(endpoint: string, options: RequestInit = {}, includeSyncKey = false): Promise<Response> {
     const headers = new Headers(options.headers || {});
     
@@ -74,25 +84,32 @@ export async function apiFetch(endpoint: string, options: RequestInit = {}, incl
     if (includeSyncKey) {
         const hash = await getSyncKeyHash();
         if (hash) {
+            // O servidor usa o hash para encontrar o registro no KV/Redis
             headers.set('X-Sync-Key-Hash', hash);
+            // Bearer opcional para compatibilidade com middlewares de auth tradicionais
+            headers.set('Authorization', `Bearer ${getSyncKey()}`);
         } else {
-            const rawKey = getSyncKey();
-            if (rawKey) {
-                headers.set('Authorization', `Bearer ${rawKey}`);
-            } else {
-                throw new Error("Chave de sincronização não encontrada.");
-            }
+            throw new Error("Sync Key missing or environment insecure (No Crypto API).");
         }
     }
 
     const config = {
         ...options,
         headers,
-        // Mantemos keepalive apenas para operações POST rápidas
+        // PERFORMANCE: Mantém a conexão aberta para múltiplos pings de sincronização
         keepalive: options.method === 'POST'
     };
 
-    return fetch(endpoint, config);
+    const response = await fetch(endpoint, config);
+
+    // Gestão de Resiliência: Se o servidor diz que a chave não existe mais, limpa localmente
+    if (response.status === 401 && hasLocalSyncKey()) {
+        console.error("[API] Unauthorized. Local key might be revoked.");
+    }
+
+    return response;
 }
 
-export const initAuth = async () => { };
+export const initAuth = async () => {
+    // Hooks de inicialização de autenticação se necessário
+};

@@ -11,10 +11,9 @@
 
 import { AppState, HabitDailyInfo } from '../state';
 import { HabitService } from './HabitService';
-import { getTodayUTCIso } from '../utils';
 
 /**
- * Hidrata monthlyLogs garantindo que BigInts e Maps sejam reconstruídos corretamente.
+ * Hidrata monthlyLogs garantindo que BigInts e Maps sejam reconstruídos corretamente de qualquer formato de transporte.
  */
 function hydrateLogs(state: AppState) {
     if (state.monthlyLogs && !(state.monthlyLogs instanceof Map)) {
@@ -32,6 +31,8 @@ function hydrateLogs(state: AppState) {
                     map.set(key, BigInt(val.val));
                 } else if (typeof val === 'string' && val.startsWith('0x')) {
                     map.set(key, BigInt(val));
+                } else if (typeof val === 'bigint') {
+                    map.set(key, val);
                 } else {
                     map.set(key, BigInt(val));
                 }
@@ -64,16 +65,18 @@ function mergeDayRecord(source: Record<string, HabitDailyInfo>, target: Record<s
             if (!tgtInst) {
                 targetInstances[time as any] = srcInst;
             } else {
-                // Preserva nota mais longa ou override mais recente
+                // Heurística: preserva a nota mais longa (provavelmente mais informativa)
                 if ((srcInst.note?.length || 0) > (tgtInst.note?.length || 0)) {
                     tgtInst.note = srcInst.note;
                 }
+                // Overrides manuais locais ganham do remoto se o timestamp geral for maior
                 if (srcInst.goalOverride !== undefined) {
                     tgtInst.goalOverride = srcInst.goalOverride;
                 }
             }
         }
         
+        // Sincroniza calendários customizados do dia
         if (source[habitId].dailySchedule) {
              target[habitId].dailySchedule = source[habitId].dailySchedule;
         }
@@ -81,19 +84,20 @@ function mergeDayRecord(source: Record<string, HabitDailyInfo>, target: Record<s
 }
 
 export async function mergeStates(local: AppState, incoming: AppState): Promise<AppState> {
+    // 1. Garantir tipos corretos antes da lógica
     hydrateLogs(local);
     hydrateLogs(incoming);
 
     const localTs = local.lastModified || 0;
     const incomingTs = incoming.lastModified || 0;
     
-    // Define base pelo mais recente
+    // Define base pelo mais recente para metadados simples
     let winner = localTs > incomingTs ? local : incoming;
     let loser = localTs > incomingTs ? incoming : local;
     
     const merged: AppState = structuredClone(winner);
     
-    // 1. União de Hábitos (por ID)
+    // 2. União de Hábitos (por ID)
     const mergedIds = new Set(merged.habits.map(h => h.id));
     loser.habits.forEach(h => {
         if (!mergedIds.has(h.id)) {
@@ -101,7 +105,7 @@ export async function mergeStates(local: AppState, incoming: AppState): Promise<
         }
     });
 
-    // 2. Mesclagem de Dados Diários (Notas/Overrides)
+    // 3. Mesclagem de Dados Diários (Notas/Overrides)
     for (const date in loser.dailyData) {
         if (!merged.dailyData[date]) {
             (merged.dailyData as any)[date] = loser.dailyData[date];
@@ -110,10 +114,10 @@ export async function mergeStates(local: AppState, incoming: AppState): Promise<
         }
     }
 
-    // 3. Mesclagem de Logs de Status (Bitmasks) - CRÍTICO
+    // 4. Mesclagem de Logs de Status (Bitmasks) usando união binária (OR)
     merged.monthlyLogs = HabitService.mergeLogs(winner.monthlyLogs, loser.monthlyLogs);
     
-    // 4. Integridade Temporal
+    // 5. Garantir consistência temporal (Sempre incremental para o servidor aceitar)
     merged.lastModified = Math.max(localTs, incomingTs, Date.now()) + 1;
 
     return merged;

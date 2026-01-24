@@ -15,12 +15,10 @@ import { HabitService } from './HabitService';
 import { clearHabitDomCache } from '../render';
 
 const DB_NAME = 'AskesisDB', DB_VERSION = 1, STORE_NAME = 'app_state';
-const LEGACY_STORAGE_KEY = 'habitTrackerState_v1';
-
 const STATE_JSON_KEY = 'askesis_core_json';
 const STATE_BINARY_KEY = 'askesis_logs_binary';
 
-const DB_OPEN_TIMEOUT_MS = 15000, IDB_SAVE_DEBOUNCE_MS = 500;
+const DB_OPEN_TIMEOUT_MS = 15000, IDB_SAVE_DEBOUNCE_MS = 800;
 let dbPromise: Promise<IDBDatabase> | null = null, saveTimeout: number | undefined;
 
 function getDB(): Promise<IDBDatabase> {
@@ -44,13 +42,17 @@ function getDB(): Promise<IDBDatabase> {
     return dbPromise;
 }
 
-async function saveSplitState(main: AppState, logs: any): Promise<void> {
+async function saveSplitState(main: AppState): Promise<void> {
     const db = await getDB();
     return new Promise((resolve, reject) => {
         const tx = db.transaction(STORE_NAME, 'readwrite');
         const store = tx.objectStore(STORE_NAME);
         
-        const { monthlyLogs, ...jsonState } = main as any;
+        // Separa logs binários para evitar inflar o JSON
+        const logs = main.monthlyLogs;
+        const jsonState = { ...main };
+        delete (jsonState as any).monthlyLogs;
+        
         store.put(jsonState, STATE_JSON_KEY);
         
         if (logs && logs.size > 0) {
@@ -79,12 +81,12 @@ function pruneOrphanedDailyData(habits: readonly Habit[], dailyData: Record<stri
 }
 
 async function saveStateInternal(immediate = false, suppressSync = false) {
-    // Garante que lastModified seja sempre crescente e único
+    // Garante que lastModified seja incremental para sync
     state.lastModified = Math.max(Date.now(), state.lastModified + 1);
 
     const structuredData = getPersistableState();
     try {
-        await saveSplitState(structuredData, state.monthlyLogs);
+        await saveSplitState(structuredData);
     } catch (e) { 
         console.error("IDB Save Failed:", e); 
     }
@@ -145,60 +147,48 @@ export async function loadState(cloudState?: AppState): Promise<AppState | null>
     }
 
     if (mainState) {
+        // Hidratação e Migração
         let migrated = migrateState(mainState, APP_VERSION);
-        migrated = {
-            ...migrated,
-            habits: (migrated.habits || []).filter(h => h && h.id && h.scheduleHistory?.length > 0)
-        };
         
-        const runCleanup = () => pruneOrphanedDailyData(migrated.habits, migrated.dailyData || {});
-        
-        if ('scheduler' in window && (window as any).scheduler) {
-             (window as any).scheduler.postTask(runCleanup, { priority: 'background' });
-        } else if ('requestIdleCallback' in window) {
-             requestIdleCallback(runCleanup);
+        // 1. Prioriza logs binários se existirem (Split-State)
+        if (binaryLogs instanceof Map && binaryLogs.size > 0) {
+            state.monthlyLogs = binaryLogs as Map<string, bigint>;
+        } 
+        // 2. Fallback para logs serializados no JSON (vinda da Nuvem/Export)
+        else if ((migrated as any).monthlyLogsSerialized) {
+            HabitService.deserializeLogsFromCloud((migrated as any).monthlyLogsSerialized);
+            delete (migrated as any).monthlyLogsSerialized;
+        }
+        else if (migrated.monthlyLogs instanceof Map) {
+            state.monthlyLogs = migrated.monthlyLogs;
         } else {
-             setTimeout(runCleanup, 3000);
+            state.monthlyLogs = new Map();
         }
-        
-        state.habits = [...migrated.habits];
-        if (migrated.lastModified) {
-            state.lastModified = migrated.lastModified;
-        }
-        
+
+        // Atualização do Estado Global
+        state.habits = [...(migrated.habits || [])];
+        state.lastModified = migrated.lastModified || Date.now();
         state.dailyData = migrated.dailyData || {};
         state.archives = migrated.archives || {};
+        state.dailyDiagnoses = migrated.dailyDiagnoses || {};
         state.notificationsShown = [...(migrated.notificationsShown || [])];
         state.pending21DayHabitIds = [...(migrated.pending21DayHabitIds || [])];
         state.pendingConsolidationHabitIds = [...(migrated.pendingConsolidationHabitIds || [])];
-        
-        if (binaryLogs instanceof Map && binaryLogs.size > 0) {
-            const firstVal = binaryLogs.values().next().value;
-            if (typeof firstVal === 'bigint') {
-                 state.monthlyLogs = binaryLogs as Map<string, bigint>;
-            } 
-            else if (firstVal instanceof ArrayBuffer) {
-                 HabitService.unpackBinaryLogs(binaryLogs as Map<string, ArrayBuffer>);
-            } else {
-                 state.monthlyLogs = binaryLogs as any;
-            }
-        } 
-        else if (migrated.monthlyLogs instanceof Map && migrated.monthlyLogs.size > 0) {
-            state.monthlyLogs = migrated.monthlyLogs;
-        } else if ((migrated as any).monthlyLogsSerialized && Array.isArray((migrated as any).monthlyLogsSerialized)) {
-            HabitService.deserializeLogsFromCloud((migrated as any).monthlyLogsSerialized);
-            delete (migrated as any).monthlyLogsSerialized;
-        } else {
-            if (!state.monthlyLogs) {
-                state.monthlyLogs = new Map();
-            }
-        }
+        state.hasOnboarded = migrated.hasOnboarded ?? true;
+        state.syncLogs = migrated.syncLogs || [];
 
+        // Limpeza de Caches
         ['streaksCache', 'scheduleCache', 'activeHabitsCache', 'unarchivedCache', 'habitAppearanceCache', 'daySummaryCache'].forEach(k => (state as any)[k].clear());
         
         clearHabitDomCache();
         Object.assign(state.uiDirtyState, { calendarVisuals: true, habitListStructure: true, chartData: true });
         
+        // Cleanup em background
+        const runCleanup = () => pruneOrphanedDailyData(state.habits, state.dailyData);
+        if ('scheduler' in window && (window as any).scheduler) {
+             (window as any).scheduler.postTask(runCleanup, { priority: 'background' });
+        }
+
         document.dispatchEvent(new CustomEvent('render-app'));
         return migrated;
     }
@@ -209,25 +199,11 @@ export const clearLocalPersistence = async () => {
     cancelPendingSave();
     try {
         const db = await getDB();
-        await new Promise<void>((resolve, reject) => {
-            const tx = db.transaction(STORE_NAME, 'readwrite');
-            const store = tx.objectStore(STORE_NAME);
-            
-            store.delete(STATE_JSON_KEY);
-            store.delete(STATE_BINARY_KEY);
-            store.delete(LEGACY_STORAGE_KEY);
-            
-            tx.oncomplete = () => resolve();
-            tx.onerror = () => reject(tx.error);
-        });
+        const tx = db.transaction(STORE_NAME, 'readwrite');
+        tx.objectStore(STORE_NAME).clear();
+        await new Promise(r => tx.oncomplete = r);
     } catch (e) {
         console.warn("IDB clear failed", e);
     }
-    localStorage.removeItem(LEGACY_STORAGE_KEY);
     state.monthlyLogs = new Map();
 };
-
-if (typeof window !== 'undefined') {
-    window.addEventListener('beforeunload', () => { flushSaveBuffer(); });
-    document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') flushSaveBuffer(); });
-}

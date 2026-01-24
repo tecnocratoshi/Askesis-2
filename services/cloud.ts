@@ -60,7 +60,6 @@ export function runWorkerTask<T>(type: 'encrypt' | 'decrypt' | 'build-ai-prompt'
     });
 }
 
-// @fix: Added missing addSyncLog function export to resolve import error in habitActions.ts
 export function addSyncLog(msg: string, type: 'success' | 'error' | 'info' = 'info', icon?: string) {
     if (!state.syncLogs) state.syncLogs = [];
     state.syncLogs.push({
@@ -69,7 +68,6 @@ export function addSyncLog(msg: string, type: 'success' | 'error' | 'info' = 'in
         type,
         icon
     });
-    // Keep logs reasonable size
     if (state.syncLogs.length > 50) {
         state.syncLogs.shift();
     }
@@ -97,18 +95,24 @@ async function resolveConflictWithServerState(serverPayload: ServerPayload) {
     try {
         const serverState = await runWorkerTask<AppState>('decrypt', serverPayload.state, syncKey);
         const localState = getPersistableState();
+        
+        addSyncLog("Conflito detectado. Iniciando Smart Merge...", "info", "🔄");
         const mergedState = await mergeStates(localState, serverState);
 
-        await persistStateLocally(mergedState);
+        // Persistência atômica
+        await persistStateLocally(mergedState, true);
         await loadState(mergedState);
         
         renderApp();
         setSyncStatus('syncSynced'); 
+        addSyncLog("Dados mesclados com sucesso.", "success", "✨");
         document.dispatchEvent(new CustomEvent('habitsChanged'));
 
+        // Upload do resultado
         syncStateWithCloud(mergedState, true);
     } catch (error) {
-        console.error("Failed to resolve conflict:", error);
+        console.error("Failed to resolve sync conflict:", error);
+        addSyncLog("Falha ao resolver conflito.", "error", "❌");
         setSyncStatus('syncError');
     }
 }
@@ -146,27 +150,39 @@ async function performSync() {
             setSyncStatus('syncSynced');
             document.dispatchEvent(new CustomEvent('habitsChanged')); 
         } else {
-            throw new Error(`Sync failed: ${response.status}`);
+            throw new Error(`Sync error: ${response.status}`);
         }
     } catch (error) {
-        console.error("Sync error:", error);
+        console.error("Sync performance failed:", error);
         setSyncStatus('syncError');
     } finally {
         isSyncInProgress = false;
-        if (pendingSyncState) performSync();
+        if (pendingSyncState) {
+            setTimeout(performSync, 500);
+        }
     }
 }
 
 export function syncStateWithCloud(appState: AppState, immediate = false) {
     if (!hasLocalSyncKey()) return;
+    
     pendingSyncState = appState; 
     setSyncStatus('syncSaving');
+
     if (syncTimeout) clearTimeout(syncTimeout);
+    
     if (isSyncInProgress) return;
-    if (immediate) performSync();
-    else syncTimeout = window.setTimeout(performSync, DEBOUNCE_DELAY);
+
+    if (immediate) {
+        performSync();
+    } else {
+        syncTimeout = window.setTimeout(performSync, DEBOUNCE_DELAY);
+    }
 }
 
+/**
+ * Função crítica de inicialização.
+ */
 export async function fetchStateFromCloud(): Promise<AppState | undefined> {
     if (!hasLocalSyncKey()) return undefined;
     const syncKey = getSyncKey();
@@ -174,23 +190,52 @@ export async function fetchStateFromCloud(): Promise<AppState | undefined> {
 
     try {
         const response = await apiFetch('/api/sync', {}, true);
-        if (!response.ok) throw new Error("Fetch failed");
+        if (response.status === 304) {
+            setSyncStatus('syncSynced');
+            return undefined;
+        }
+        if (!response.ok) throw new Error("Cloud fetch failed");
 
         let data = await response.json();
-        // REPAIR: Trata casos onde o servidor envia string JSON em vez de objeto
         if (typeof data === 'string') data = JSON.parse(data);
 
+        const localState = getPersistableState();
+
         if (data && data.state) {
-            const appState = await runWorkerTask<AppState>('decrypt', data.state, syncKey);
+            const remoteModified = data.lastModified || 0;
+            const localModified = localState.lastModified || 0;
+
+            if (localModified > remoteModified) {
+                syncStateWithCloud(localState, true);
+                return undefined;
+            }
+
+            const remoteState = await runWorkerTask<AppState>('decrypt', data.state, syncKey);
+            
+            if (remoteModified > localModified) {
+                addSyncLog("Dados novos na nuvem encontrados. Sincronizando...", "info", "☁️");
+                const mergedState = await mergeStates(localState, remoteState);
+                
+                await persistStateLocally(mergedState, true);
+                await loadState(mergedState);
+                renderApp();
+                
+                if (mergedState.lastModified > remoteModified) {
+                    syncStateWithCloud(mergedState, true);
+                }
+            }
+
             setSyncStatus('syncSynced');
-            return appState;
+            return remoteState;
         } else {
-            if (state.habits.length > 0) syncStateWithCloud(getPersistableState(), true);
+            if (localState.habits.length > 0) {
+                syncStateWithCloud(localState, true);
+            }
             setSyncStatus('syncSynced');
             return undefined;
         }
     } catch (error) {
-        console.error("Cloud fetch error:", error);
+        console.error("Cloud bootstrapper failed:", error);
         setSyncStatus('syncError');
         throw error;
     }
