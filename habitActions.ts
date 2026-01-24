@@ -34,7 +34,6 @@ import {
 } from './render';
 import { ui } from './render/ui';
 import { t, getTimeOfDayName, formatDate, formatList, getAiLanguageName } from './i18n'; 
-// @fix: Added addSyncLog to imports from ./services/cloud as it is used in performAIAnalysis
 import { runWorkerTask, addSyncLog } from './services/cloud';
 import { apiFetch, clearKey } from './services/api';
 import { HabitService } from './services/HabitService';
@@ -64,11 +63,10 @@ const ActionContext = {
 
 /**
  * Notifica a UI sobre mudanças de dados.
- * REPAIR [2025-06-05]: 
- * 1. Agora limpa activeHabitsCache SEMPRE (essencial para que novos hábitos apareçam).
- * 2. Limpa o Cache do DOM para evitar cards órfãos.
+ * @param fullRebuild Se true, limpa caches pesados de schedule e DOM.
+ * @param immediate Se true, força o salvamento e sincronização imediata (sem debounce).
  */
-function _notifyChanges(fullRebuild = false) {
+function _notifyChanges(fullRebuild = false, immediate = false) {
     if (fullRebuild) {
         clearScheduleCache();
         clearHabitDomCache();
@@ -80,10 +78,14 @@ function _notifyChanges(fullRebuild = false) {
     
     state.uiDirtyState.habitListStructure = state.uiDirtyState.calendarVisuals = true;
     
+    // REPAIR [2025-06-05]: Incrementa o selo temporal para garantir sincronização
+    state.lastModified = Math.max(Date.now(), state.lastModified + 1);
+
     // Liberação preventiva de travas de interação
     document.body.classList.remove('is-interaction-active', 'is-dragging-active');
 
-    saveState();
+    // Salvamento com suporte a flag de urgência
+    saveState(immediate);
     
     // Deferência garante reatividade instantânea após limpeza de caches
     requestAnimationFrame(() => {
@@ -94,6 +96,7 @@ function _notifyChanges(fullRebuild = false) {
 function _notifyPartialUIRefresh(date: string, habitIds: string[]) {
     invalidateCachesForDateChange(date, habitIds);
     state.uiDirtyState.calendarVisuals = true;
+    state.lastModified = Math.max(Date.now(), state.lastModified + 1);
     saveState();
     ['render-app', 'habitsChanged'].forEach(ev => document.dispatchEvent(new CustomEvent(ev)));
 }
@@ -106,7 +109,11 @@ function _lockActionHabit(habitId: string): Habit | null {
     return h;
 }
 
-function _requestFutureScheduleChange(habitId: string, targetDate: string, updateFn: (s: HabitSchedule) => HabitSchedule) {
+/**
+ * Altera o histórico de horários para o futuro.
+ * @param immediate Se true, a alteração é considerada crítica (destrutiva) e sincroniza imediatamente.
+ */
+function _requestFutureScheduleChange(habitId: string, targetDate: string, updateFn: (s: HabitSchedule) => HabitSchedule, immediate = false) {
     const habit = state.habits.find(h => h.id === habitId);
     if (!habit || !/^\d{4}-\d{2}-\d{2}$/.test(targetDate)) return;
 
@@ -130,7 +137,7 @@ function _requestFutureScheduleChange(habitId: string, targetDate: string, updat
     }
     history.sort((a, b) => a.startDate.localeCompare(b.startDate));
     habit.graduatedOn = undefined;
-    _notifyChanges(true);
+    _notifyChanges(true, immediate);
 }
 
 function _checkStreakMilestones(habit: Habit, dateISO: string) {
@@ -216,14 +223,16 @@ const _applyHabitDeletion = async () => {
             state.unarchivedCache.delete(y);
         });
     } catch (e) { console.error(e); }
-    _notifyChanges(true);
+    
+    // Ação Destrutiva: Sincronização IMEDIATA
+    _notifyChanges(true, true);
     ActionContext.reset();
 };
 
 // --- PUBLIC ACTIONS ---
 
 export function checkAndAnalyzeDayContext(dateISO: string) {
-    // Implementação pendente ou via Evento
+    // Implementação via services/analysis.ts
 }
 
 export function performArchivalCheck() {
@@ -255,12 +264,6 @@ export function reorderHabit(movedHabitId: string, targetHabitId: string, pos: '
     if (!skip) _notifyChanges(false);
 }
 
-/**
- * Salva o hábito a partir do modal.
- * REPAIR [2025-06-05]: Invertida a ordem (closeModal ANTES de _notifyChanges) 
- * para garantir que as classes de travamento da UI sejam removidas antes do motor
- * de renderização decidir reconstruir a lista.
- */
 export function saveHabitFromModal() {
     if (!state.editingHabit) return;
     const { isNew, habitId, formData, targetDate } = state.editingHabit;
@@ -274,7 +277,6 @@ export function saveHabitFromModal() {
         frequency: formData.frequency.type === 'specific_days_of_week' ? { ...formData.frequency, days: [...formData.frequency.days] } : { ...formData.frequency }
     };
     
-    // 1. Fechar modal primeiro para liberar ciclos de evento e travas de body
     closeModal(ui.editHabitModal);
 
     if (isNew) {
@@ -405,7 +407,11 @@ export function requestHabitEndingFromModal(habitId: string) {
     const h = _lockActionHabit(habitId), target = getSafeDate(state.selectedDate); if (!h) return;
     ActionContext.ending = { habitId, targetDate: target };
     showConfirmationModal(t('confirmEndHabit', { habitName: getHabitDisplayInfo(h, target).name, date: formatDate(parseUTCIsoDate(target), { day: 'numeric', month: 'long', timeZone: 'UTC' }) }), 
-        () => { _requestFutureScheduleChange(habitId, target, s => ({ ...s, endDate: target })); ActionContext.reset(); }, { confirmButtonStyle: 'danger', confirmText: t('endButton'), onCancel: () => ActionContext.reset() });
+        () => { 
+            // Ação Destrutiva: Sincronização IMEDIATA
+            _requestFutureScheduleChange(habitId, target, s => ({ ...s, endDate: target }), true); 
+            ActionContext.reset(); 
+        }, { confirmButtonStyle: 'danger', confirmText: t('endButton'), onCancel: () => ActionContext.reset() });
 }
 
 export function requestHabitPermanentDeletion(habitId: string) {
@@ -414,7 +420,17 @@ export function requestHabitPermanentDeletion(habitId: string) {
         showConfirmationModal(t('confirmPermanentDelete', { habitName: getHabitDisplayInfo(state.habits.find(x => x.id === habitId)!).name }), _applyHabitDeletion, { confirmButtonStyle: 'danger', confirmText: t('deleteButton'), onCancel: () => ActionContext.reset() });
     }
 }
-export function graduateHabit(habitId: string) { const h = state.habits.find(x => x.id === habitId); if (h) { h.graduatedOn = getSafeDate(state.selectedDate); _notifyChanges(true); triggerHaptic('success'); } }
+
+export function graduateHabit(habitId: string) { 
+    const h = state.habits.find(x => x.id === habitId); 
+    if (h) { 
+        h.graduatedOn = getSafeDate(state.selectedDate); 
+        // Ação Destrutiva: Sincronização IMEDIATA
+        _notifyChanges(true, true); 
+        triggerHaptic('success'); 
+    } 
+}
+
 export async function resetApplicationData() { 
     state.habits = []; state.dailyData = {}; state.archives = {}; state.notificationsShown = []; state.pending21DayHabitIds = []; state.pendingConsolidationHabitIds = []; state.monthlyLogs = new Map();
     document.dispatchEvent(new CustomEvent('render-app'));
@@ -434,11 +450,18 @@ export function setGoalOverride(habitId: string, d: string, t: TimeOfDay, v: num
         saveState(); document.dispatchEvent(new CustomEvent('card-goal-changed', { detail: { habitId, time: t, date: d } })); _notifyPartialUIRefresh(d, [habitId]); 
     } catch (e) { console.error(e); } 
 }
+
 export function requestHabitTimeRemoval(habitId: string, time: TimeOfDay) {
     const h = _lockActionHabit(habitId), target = getSafeDate(state.selectedDate); if (!h) return;
     ActionContext.removal = { habitId, time, targetDate: target };
-    showConfirmationModal(t('confirmRemoveTimePermanent', { habitName: getHabitDisplayInfo(h, target).name, time: getTimeOfDayName(time) }), () => { ensureHabitDailyInfo(target, habitId).dailySchedule = undefined; _requestFutureScheduleChange(habitId, target, s => ({ ...s, times: s.times.filter(x => x !== time) as readonly TimeOfDay[] })); ActionContext.reset(); }, { title: t('modalRemoveTimeTitle'), confirmText: t('deleteButton'), confirmButtonStyle: 'danger', onCancel: () => ActionContext.reset() });
+    showConfirmationModal(t('confirmRemoveTimePermanent', { habitName: getHabitDisplayInfo(h, target).name, time: getTimeOfDayName(time) }), () => { 
+        ensureHabitDailyInfo(target, habitId).dailySchedule = undefined; 
+        // Ação Destrutiva: Sincronização IMEDIATA
+        _requestFutureScheduleChange(habitId, target, s => ({ ...s, times: s.times.filter(x => x !== time) as readonly TimeOfDay[] }), true); 
+        ActionContext.reset(); 
+    }, { title: t('modalRemoveTimeTitle'), confirmText: t('deleteButton'), confirmButtonStyle: 'danger', onCancel: () => ActionContext.reset() });
 }
+
 export function exportData() {
     const stateToExport = getPersistableState();
     const logs = HabitService.serializeLogsForCloud(); 

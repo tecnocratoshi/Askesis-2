@@ -1,4 +1,3 @@
-
 /**
  * @license
  * SPDX-License-Identifier: Apache-2.0
@@ -19,7 +18,10 @@ const STATE_JSON_KEY = 'askesis_core_json';
 const STATE_BINARY_KEY = 'askesis_logs_binary';
 
 const DB_OPEN_TIMEOUT_MS = 15000, IDB_SAVE_DEBOUNCE_MS = 800;
-let dbPromise: Promise<IDBDatabase> | null = null, saveTimeout: number | undefined;
+let dbPromise: Promise<IDBDatabase> | null = null;
+let saveTimeout: number | undefined;
+let activeSavePromise: Promise<void> | null = null;
+let pendingSaveResolve: (() => void) | null = null;
 
 function getDB(): Promise<IDBDatabase> {
     if (!dbPromise) {
@@ -48,7 +50,6 @@ async function saveSplitState(main: AppState): Promise<void> {
         const tx = db.transaction(STORE_NAME, 'readwrite');
         const store = tx.objectStore(STORE_NAME);
         
-        // Separa logs binários para evitar inflar o JSON
         const logs = main.monthlyLogs;
         const jsonState = { ...main };
         delete (jsonState as any).monthlyLogs;
@@ -81,18 +82,27 @@ function pruneOrphanedDailyData(habits: readonly Habit[], dailyData: Record<stri
 }
 
 async function saveStateInternal(immediate = false, suppressSync = false) {
-    // Garante que lastModified seja incremental para sync
-    state.lastModified = Math.max(Date.now(), state.lastModified + 1);
+    // Serializa o acesso ao IDB para evitar colisões de transação
+    if (activeSavePromise) await activeSavePromise;
 
-    const structuredData = getPersistableState();
+    activeSavePromise = (async () => {
+        state.lastModified = Math.max(Date.now(), state.lastModified + 1);
+        const structuredData = getPersistableState();
+        try {
+            await saveSplitState(structuredData);
+        } catch (e) { 
+            console.error("IDB Save Failed:", e); 
+        }
+        
+        if (!suppressSync) {
+            syncHandler?.(structuredData, immediate);
+        }
+    })();
+
     try {
-        await saveSplitState(structuredData);
-    } catch (e) { 
-        console.error("IDB Save Failed:", e); 
-    }
-    
-    if (!suppressSync) {
-        syncHandler?.(structuredData, immediate);
+        await activeSavePromise;
+    } finally {
+        activeSavePromise = null;
     }
 }
 
@@ -101,23 +111,60 @@ export function cancelPendingSave() {
         clearTimeout(saveTimeout);
         saveTimeout = undefined;
     }
+    if (pendingSaveResolve) {
+        pendingSaveResolve();
+        pendingSaveResolve = null;
+    }
 }
 
 export async function flushSaveBuffer(): Promise<void> {
     if (saveTimeout !== undefined) {
         clearTimeout(saveTimeout);
         saveTimeout = undefined;
+        const resolve = pendingSaveResolve;
+        pendingSaveResolve = null;
         await saveStateInternal(true);
+        resolve?.();
     }
 }
 
-export async function saveState(suppressSync = false): Promise<void> {
-    if (saveTimeout) clearTimeout(saveTimeout);
-    saveTimeout = self.setTimeout(() => saveStateInternal(false, suppressSync), IDB_SAVE_DEBOUNCE_MS);
+/**
+ * Persiste o estado da aplicação.
+ * @param immediate Se true, limpa o buffer e salva instantaneamente.
+ * @param suppressSync Se true, evita disparar o syncHandler.
+ */
+export async function saveState(immediate = false, suppressSync = false): Promise<void> {
+    if (saveTimeout !== undefined) {
+        clearTimeout(saveTimeout);
+        saveTimeout = undefined;
+    }
+
+    if (immediate) {
+        const resolve = pendingSaveResolve;
+        pendingSaveResolve = null;
+        await saveStateInternal(true, suppressSync);
+        resolve?.();
+    } else {
+        return new Promise((resolve) => {
+            const oldResolve = pendingSaveResolve;
+            pendingSaveResolve = () => {
+                oldResolve?.();
+                resolve();
+            };
+
+            saveTimeout = self.setTimeout(async () => {
+                saveTimeout = undefined;
+                const currentResolve = pendingSaveResolve;
+                pendingSaveResolve = null;
+                await saveStateInternal(false, suppressSync);
+                currentResolve?.();
+            }, IDB_SAVE_DEBOUNCE_MS);
+        });
+    }
 }
 
 export const persistStateLocally = (data: AppState, suppressSync = false) => {
-    return saveStateInternal(true, suppressSync);
+    return saveState(true, suppressSync);
 };
 
 export async function loadState(cloudState?: AppState): Promise<AppState | null> {
@@ -147,14 +194,11 @@ export async function loadState(cloudState?: AppState): Promise<AppState | null>
     }
 
     if (mainState) {
-        // Hidratação e Migração
         let migrated = migrateState(mainState, APP_VERSION);
         
-        // 1. Prioriza logs binários se existirem (Split-State)
         if (binaryLogs instanceof Map && binaryLogs.size > 0) {
             state.monthlyLogs = binaryLogs as Map<string, bigint>;
         } 
-        // 2. Fallback para logs serializados no JSON (vinda da Nuvem/Export)
         else if ((migrated as any).monthlyLogsSerialized) {
             HabitService.deserializeLogsFromCloud((migrated as any).monthlyLogsSerialized);
             delete (migrated as any).monthlyLogsSerialized;
@@ -165,7 +209,6 @@ export async function loadState(cloudState?: AppState): Promise<AppState | null>
             state.monthlyLogs = new Map();
         }
 
-        // Atualização do Estado Global
         state.habits = [...(migrated.habits || [])];
         state.lastModified = migrated.lastModified || Date.now();
         state.dailyData = migrated.dailyData || {};
@@ -177,13 +220,11 @@ export async function loadState(cloudState?: AppState): Promise<AppState | null>
         state.hasOnboarded = migrated.hasOnboarded ?? true;
         state.syncLogs = migrated.syncLogs || [];
 
-        // Limpeza de Caches
         ['streaksCache', 'scheduleCache', 'activeHabitsCache', 'unarchivedCache', 'habitAppearanceCache', 'daySummaryCache'].forEach(k => (state as any)[k].clear());
         
         clearHabitDomCache();
         Object.assign(state.uiDirtyState, { calendarVisuals: true, habitListStructure: true, chartData: true });
         
-        // Cleanup em background
         const runCleanup = () => pruneOrphanedDailyData(state.habits, state.dailyData);
         if ('scheduler' in window && (window as any).scheduler) {
              (window as any).scheduler.postTask(runCleanup, { priority: 'background' });

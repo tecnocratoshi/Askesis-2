@@ -15,7 +15,7 @@ try {
 }
 
 // CONSTANTS (Version Bump to Force Update)
-const CACHE_NAME = 'habit-tracker-v19-sync-final';
+const CACHE_NAME = 'habit-tracker-v20-sync-bg';
 
 // PERF: Static Asset List (Pre-allocated)
 const CACHE_FILES = [
@@ -33,16 +33,13 @@ const CACHE_FILES = [
     '/icons/badge.svg'
 ];
 
-// PERF: Hoisted Option Objects (Zero GC per request)
 const RELOAD_OPTS = { cache: 'reload' };
 const HTML_FALLBACK = '/index.html';
 const MATCH_OPTS = { ignoreSearch: true };
-const NETWORK_TIMEOUT_MS = 3000; // 3 Seconds max wait for Navigation
+const NETWORK_TIMEOUT_MS = 3000;
 
-// HELPER: Timeout Promise
 const timeout = (ms) => new Promise((_, reject) => setTimeout(() => reject(new Error('Network Timeout')), ms));
 
-// HELPER: Update App Shell Cache (DRY)
 const updateShellCache = (res) => {
     if (res && res.ok) {
         const copy = res.clone();
@@ -51,17 +48,15 @@ const updateShellCache = (res) => {
     return res;
 };
 
-// --- INSTALL PHASE ---
+// --- INSTALL & ACTIVATE ---
 
 self.addEventListener('install', (event) => {
-    // FORCE UPDATE: Assume control immediately
     self.skipWaiting();
-    
     event.waitUntil(
         caches.open(CACHE_NAME).then(cache => {
             return Promise.all(CACHE_FILES.map(url => 
                 fetch(url, RELOAD_OPTS).then(res => {
-                    if (!res.ok) throw new Error(`[SW] Failed to cache: ${url} (${res.status})`);
+                    if (!res.ok) throw new Error(`[SW] Failed to cache: ${url}`);
                     return cache.put(url, res);
                 })
             ));
@@ -69,10 +64,7 @@ self.addEventListener('install', (event) => {
     );
 });
 
-// --- ACTIVATE PHASE ---
-
 self.addEventListener('activate', (event) => {
-    // FORCE UPDATE: Claim clients immediately to serve new files
     event.waitUntil(
         Promise.all([
             self.clients.claim(),
@@ -84,27 +76,41 @@ self.addEventListener('activate', (event) => {
     );
 });
 
-// --- FETCH PHASE (HOT PATH) ---
+// --- BACKGROUND SYNC ---
+
+/**
+ * BACKGROUND SYNC EVENT:
+ * Disparado pelo navegador quando a conectividade é restabelecida para tags registradas.
+ */
+self.addEventListener('sync', (event) => {
+    if (event.tag === 'sync-cloud-pending') {
+        console.log('[SW] Conectividade recuperada. Solicitando sincronização às abas ativas...');
+        event.waitUntil(
+            self.clients.matchAll({ type: 'window' }).then(clients => {
+                // Notifica todas as abas abertas para que tentem sincronizar agora
+                clients.forEach(client => {
+                    client.postMessage({ type: 'REQUEST_SYNC' });
+                });
+            })
+        );
+    }
+});
+
+// --- FETCH PHASE ---
 
 self.addEventListener('fetch', (event) => {
     const req = event.request;
     const url = new URL(req.url); 
 
-    // 1. Strict API Bypass
     if (url.pathname.startsWith('/api/')) return;
 
-    // 2. Navigation Strategy (App Shell)
     if (req.mode === 'navigate') {
         event.respondWith(
             (async () => {
                 try {
                     const preloadResp = await event.preloadResponse;
                     if (preloadResp) return updateShellCache(preloadResp);
-
-                    const networkResp = await Promise.race([
-                        fetch(req),
-                        timeout(NETWORK_TIMEOUT_MS)
-                    ]);
+                    const networkResp = await Promise.race([fetch(req), timeout(NETWORK_TIMEOUT_MS)]);
                     return updateShellCache(networkResp);
                 } catch (error) {
                     return caches.match(HTML_FALLBACK, MATCH_OPTS);
@@ -114,32 +120,15 @@ self.addEventListener('fetch', (event) => {
         return;
     }
 
-    // 3. Asset Strategy (Stale-while-Revalidate)
     event.respondWith(
         caches.match(req).then(cached => {
             if (cached) return cached;
-
             return fetch(req).then(networkResponse => {
-                if (!networkResponse || networkResponse.status !== 200 || networkResponse.type !== 'basic') {
-                    return networkResponse;
-                }
-
-                const contentType = networkResponse.headers.get('content-type');
-                const isAsset = req.destination && ['script', 'style', 'image'].includes(req.destination);
-                
-                if (isAsset && contentType && contentType.includes('text/html')) {
-                    return networkResponse;
-                }
-
+                if (!networkResponse || networkResponse.status !== 200 || networkResponse.type !== 'basic') return networkResponse;
                 const responseToCache = networkResponse.clone();
-                caches.open(CACHE_NAME).then(cache => {
-                    cache.put(req, responseToCache).catch(() => {});
-                });
-
+                caches.open(CACHE_NAME).then(cache => cache.put(req, responseToCache));
                 return networkResponse;
-            }).catch(err => {
-                return new Response(null, { status: 408, statusText: "Network Failure" });
-            });
+            }).catch(() => new Response(null, { status: 408 }));
         })
     );
 });
