@@ -1,4 +1,3 @@
-
 /**
  * @license
  * SPDX-License-Identifier: Apache-2.0
@@ -6,7 +5,7 @@
 
 import { ui } from "../render/ui";
 import { t } from "../i18n";
-import { downloadRemoteState, syncStateWithCloud, setSyncStatus } from "../services/cloud";
+import { downloadRemoteState, syncStateWithCloud, setSyncStatus, clearSyncHashCache } from "../services/cloud";
 import { loadState, saveState } from "../services/persistence";
 import { renderApp, openSyncDebugModal, clearHabitDomCache } from "../render";
 import { showConfirmationModal } from "../render/modals";
@@ -57,6 +56,9 @@ async function _processKey(key: string) {
     const originalKey = getSyncKey();
     
     try {
+        // Ao trocar de chave, o cache de hashes antigo torna-se inválido
+        clearSyncHashCache();
+        
         storeKey(key);
         
         const cloudState = await downloadRemoteState();
@@ -82,7 +84,6 @@ async function _processKey(key: string) {
         }
         _refreshViewState(); 
     } catch (error: any) {
-        // Em caso de erro catastrófico ou 401, revertemos a chave se houver uma anterior
         if (originalKey) storeKey(originalKey);
         else clearKey();
 
@@ -93,7 +94,6 @@ async function _processKey(key: string) {
             ui.syncErrorMsg.classList.remove('hidden');
         }
         setSyncStatus('syncError');
-        // Não fechamos a view de entrada para o usuário tentar corrigir a chave
     } finally {
         ui.submitKeyBtn.textContent = originalBtnText;
         _toggleButtons(buttons, false);
@@ -108,6 +108,7 @@ const _handleEnableSync = () => {
         if (ui.syncErrorMsg) ui.syncErrorMsg.classList.add('hidden');
         
         const newKey = generateUUID();
+        clearSyncHashCache(); // Garante envio total para nova chave
         storeKey(newKey);
         setSyncStatus('syncSynced');
         

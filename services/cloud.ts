@@ -78,10 +78,16 @@ function splitIntoShards(appState: AppState): Record<string, any> {
 }
 
 /**
+ * Limpa o cache local de hashes de sincronização.
+ * Usado ao trocar de chave criptográfica para forçar um re-upload completo.
+ */
+export function clearSyncHashCache() {
+    lastSyncedHashes.clear();
+    console.debug("[Sync] Hash cache cleared.");
+}
+
+/**
  * MurmurHash3 32-bit (Seedable).
- * Alta performance, baixo índice de colisão e efeito avalanche robusto.
- * @param key String para hash.
- * @param seed Semente baseada na versão para evitar colisões entre versões do esquema.
  */
 function murmurHash3(key: string, seed: number = APP_VERSION): string {
     let remainder = key.length & 3;
@@ -132,6 +138,7 @@ export function addSyncLog(msg: string, type: 'success' | 'error' | 'info' = 'in
     if (!state.syncLogs) state.syncLogs = [];
     state.syncLogs.push({ time: Date.now(), msg, type, icon });
     if (state.syncLogs.length > 50) state.syncLogs.shift();
+    console.debug(`[Sync Log] ${msg}`);
 }
 
 export function setSyncStatus(statusKey: 'syncSaving' | 'syncSynced' | 'syncError' | 'syncInitial') {
@@ -182,7 +189,7 @@ async function resolveConflictWithServerState(serverShards: Record<string, strin
         lastSyncedHashes.clear();
         syncStateWithCloud(mergedState, true);
     } catch (error) {
-        console.error("Conflict resolution failed:", error);
+        addSyncLog("Falha na resolução de conflito.", "error", "❌");
         setSyncStatus('syncError');
     }
 }
@@ -212,11 +219,13 @@ async function performSync() {
         }
 
         if (changeCount === 0) {
+            addSyncLog("Nenhuma alteração pendente para upload.", "info", "💨");
             setSyncStatus('syncSynced');
             isSyncInProgress = false;
             return;
         }
 
+        addSyncLog(`Enviando ${changeCount} shards para nuvem...`, "info", "📤");
         const payload = { lastModified: appState.lastModified, shards: dirtyShards };
         const response = await apiFetch('/api/sync', { method: 'POST', body: JSON.stringify(payload) }, true);
 
@@ -224,13 +233,14 @@ async function performSync() {
             lastSyncedHashes.clear();
             await resolveConflictWithServerState(await response.json());
         } else if (response.ok || response.status === 304) {
+            addSyncLog("Sincronização concluída.", "success", "✅");
             setSyncStatus('syncSynced');
             document.dispatchEvent(new CustomEvent('habitsChanged')); 
         } else {
             throw new Error(`Sync error: ${response.status}`);
         }
-    } catch (error) {
-        console.error("Sync failed:", error);
+    } catch (error: any) {
+        addSyncLog(`Erro: ${error.message}`, "error", "⚠️");
         setSyncStatus('syncError');
     } finally {
         isSyncInProgress = false;
@@ -288,11 +298,19 @@ async function reconstructStateFromShards(shards: Record<string, string>): Promi
 }
 
 export async function downloadRemoteState(): Promise<AppState | undefined> {
+    addSyncLog("Buscando dados na nuvem...", "info", "🔍");
     const response = await apiFetch('/api/sync', {}, true);
-    if (response.status === 304) return undefined;
+    if (response.status === 304) {
+        addSyncLog("Nuvens em repouso (304).", "info", "💤");
+        return undefined;
+    }
     if (!response.ok) throw new Error("Cloud fetch failed");
     const shards = await response.json();
-    if (!shards) return undefined;
+    if (!shards) {
+        addSyncLog("Nenhum dado encontrado na nuvem.", "info", "🌫️");
+        return undefined;
+    }
+    addSyncLog("Dados remotos baixados com sucesso.", "success", "📥");
     return await reconstructStateFromShards(shards);
 }
 
@@ -314,12 +332,13 @@ export async function fetchStateFromCloud(): Promise<AppState | undefined> {
         const localModified = localState.lastModified || 0;
 
         if (remoteModified > localModified) {
-            addSyncLog("Sincronizando com nuvem...", "info", "☁️");
+            addSyncLog("Sincronizando atualização remota...", "info", "☁️");
             const mergedState = await mergeStates(localState, remoteState);
             await persistStateLocally(mergedState, true);
             await loadState(mergedState);
             renderApp();
         } else if (localModified > remoteModified) {
+            addSyncLog("Local é mais recente. Forçando upload.", "info", "🚀");
             syncStateWithCloud(localState, true);
         }
 
