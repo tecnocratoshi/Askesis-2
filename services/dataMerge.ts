@@ -8,7 +8,7 @@
  * @description Algoritmo de Reconciliação de Estado (Smart Merge / CRDT-lite).
  */
 
-import { AppState, HabitDailyInfo } from '../state';
+import { AppState, HabitDailyInfo, Habit, HabitSchedule } from '../state';
 import { HabitService } from './HabitService';
 
 /**
@@ -40,9 +40,41 @@ function hydrateLogs(appState: AppState) {
                 console.warn(`[Merge] Failed to hydrate bitmask for ${key}`, e);
             }
         });
-        // Mutação segura no objeto temporário de merge
         (appState as any).monthlyLogs = map;
     }
+}
+
+/**
+ * Mescla o histórico de agendamentos de um hábito específico.
+ * Lógica: Prioriza entradas que possuem endDate (intenção de encerramento) 
+ * ou a versão mais completa de cada fatia temporal.
+ */
+function mergeHabitHistories(localHistory: HabitSchedule[], incomingHistory: HabitSchedule[]): HabitSchedule[] {
+    const historyMap = new Map<string, HabitSchedule>();
+
+    // Adiciona histórico local ao mapa
+    localHistory.forEach(s => historyMap.set(s.startDate, { ...s }));
+
+    // Mescla com o histórico recebido
+    incomingHistory.forEach(incoming => {
+        const existing = historyMap.get(incoming.startDate);
+        if (!existing) {
+            historyMap.set(incoming.startDate, { ...incoming });
+        } else {
+            // CONFLICT RESOLUTION: Se o incoming tem um endDate e o local não,
+            // ou se o incoming foi modificado mais recentemente (implícito pelo fluxo).
+            // Damos peso maior para a presença de endDate, pois encerrar é uma ação de alto nível.
+            if (incoming.endDate && !existing.endDate) {
+                existing.endDate = incoming.endDate;
+            }
+            
+            // Mescla outros campos se necessário (cores, ícones, metas)
+            // Aqui poderíamos adicionar lógica de timestamp por shard se necessário,
+            // mas o endDate é o critério crítico solicitado.
+        }
+    });
+
+    return Array.from(historyMap.values()).sort((a, b) => a.startDate.localeCompare(b.startDate));
 }
 
 /**
@@ -66,7 +98,6 @@ function mergeDayRecord(source: Record<string, HabitDailyInfo>, target: Record<s
             if (!tgtInst) {
                 targetInstances[time as any] = srcInst;
             } else {
-                // Heurística: preserva a nota mais longa
                 if ((srcInst.note?.length || 0) > (tgtInst.note?.length || 0)) {
                     tgtInst.note = srcInst.note;
                 }
@@ -83,28 +114,46 @@ function mergeDayRecord(source: Record<string, HabitDailyInfo>, target: Record<s
 }
 
 export async function mergeStates(local: AppState, incoming: AppState): Promise<AppState> {
-    // 1. Garantir tipos corretos antes da lógica
     hydrateLogs(local);
     hydrateLogs(incoming);
 
     const localTs = local.lastModified || 0;
     const incomingTs = incoming.lastModified || 0;
     
-    // Define base pelo mais recente
     let winner = localTs > incomingTs ? local : incoming;
     let loser = localTs > incomingTs ? incoming : local;
     
     const merged: AppState = structuredClone(winner);
     
-    // 2. União de Hábitos (por ID)
-    const mergedIds = new Set(merged.habits.map(h => h.id));
-    loser.habits.forEach(h => {
-        if (!mergedIds.has(h.id)) {
-            (merged.habits as any).push(h);
+    // 1. RECONCILIAÇÃO PROFUNDA DE HÁBITOS
+    const mergedHabits = new Map<string, Habit>();
+    
+    // Mapeia vencedores
+    merged.habits.forEach(h => mergedHabits.set(h.id, h));
+    
+    // Verifica perdedores para merges parciais
+    loser.habits.forEach(loserHabit => {
+        const winnerHabit = mergedHabits.get(loserHabit.id);
+        if (!winnerHabit) {
+            // Hábito novo no perdedor (criado offline)
+            mergedHabits.set(loserHabit.id, loserHabit);
+        } else {
+            // Hábito existe em ambos. Faz merge do scheduleHistory.
+            winnerHabit.scheduleHistory = mergeHabitHistories(
+                winnerHabit.scheduleHistory,
+                loserHabit.scheduleHistory
+            );
+            
+            // Sincroniza flags de formatura (graduatedOn)
+            if (loserHabit.graduatedOn && (!winnerHabit.graduatedOn || loserHabit.graduatedOn < winnerHabit.graduatedOn)) {
+                winnerHabit.graduatedOn = loserHabit.graduatedOn;
+            }
         }
     });
 
-    // 3. Mesclagem de Dados Diários
+    (merged as any).habits = Array.from(mergedHabits.values());
+
+    // 2. Mesclagem de Dados Diários (Notas/Overrides)
     for (const date in loser.dailyData) {
         if (!merged.dailyData[date]) {
             (merged.dailyData as any)[date] = loser.dailyData[date];
@@ -113,10 +162,9 @@ export async function mergeStates(local: AppState, incoming: AppState): Promise<
         }
     }
 
-    // 4. Mesclagem de Logs de Status (Bitmasks)
+    // 3. Mesclagem de Logs de Status (Bitmasks)
     merged.monthlyLogs = HabitService.mergeLogs(winner.monthlyLogs, loser.monthlyLogs);
     
-    // 5. Garantir consistência temporal
     merged.lastModified = Math.max(localTs, incomingTs, Date.now()) + 1;
 
     return merged;
