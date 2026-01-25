@@ -1,4 +1,3 @@
-
 /**
  * @license
  * SPDX-License-Identifier: Apache-2.0
@@ -13,13 +12,13 @@ import { AppState, HabitDailyInfo } from '../state';
 import { HabitService } from './HabitService';
 
 /**
- * Hidrata monthlyLogs garantindo que BigInts e Maps sejam reconstruídos corretamente de qualquer formato de transporte.
+ * Hidrata monthlyLogs garantindo que BigInts e Maps sejam reconstruídos corretamente.
  */
-function hydrateLogs(state: AppState) {
-    if (state.monthlyLogs && !(state.monthlyLogs instanceof Map)) {
-        const entries = Array.isArray(state.monthlyLogs) 
-            ? state.monthlyLogs 
-            : Object.entries(state.monthlyLogs);
+function hydrateLogs(appState: AppState) {
+    if (appState.monthlyLogs && !(appState.monthlyLogs instanceof Map)) {
+        const entries = Array.isArray(appState.monthlyLogs) 
+            ? appState.monthlyLogs 
+            : Object.entries(appState.monthlyLogs);
             
         const map = new Map<string, bigint>();
         entries.forEach((item: any) => {
@@ -29,18 +28,20 @@ function hydrateLogs(state: AppState) {
             try {
                 if (val && typeof val === 'object' && val.__type === 'bigint') {
                     map.set(key, BigInt(val.val));
-                } else if (typeof val === 'string' && val.startsWith('0x')) {
-                    map.set(key, BigInt(val));
+                } else if (typeof val === 'string') {
+                    const hexClean = val.startsWith('0x') ? val : '0x' + val;
+                    map.set(key, BigInt(hexClean));
                 } else if (typeof val === 'bigint') {
                     map.set(key, val);
                 } else {
                     map.set(key, BigInt(val));
                 }
             } catch(e) {
-                console.warn(`[Merge] Failed to hydrate bitmask for ${key}`);
+                console.warn(`[Merge] Failed to hydrate bitmask for ${key}`, e);
             }
         });
-        state.monthlyLogs = map;
+        // Mutação segura no objeto temporário de merge
+        (appState as any).monthlyLogs = map;
     }
 }
 
@@ -65,18 +66,16 @@ function mergeDayRecord(source: Record<string, HabitDailyInfo>, target: Record<s
             if (!tgtInst) {
                 targetInstances[time as any] = srcInst;
             } else {
-                // Heurística: preserva a nota mais longa (provavelmente mais informativa)
+                // Heurística: preserva a nota mais longa
                 if ((srcInst.note?.length || 0) > (tgtInst.note?.length || 0)) {
                     tgtInst.note = srcInst.note;
                 }
-                // Overrides manuais locais ganham do remoto se o timestamp geral for maior
                 if (srcInst.goalOverride !== undefined) {
                     tgtInst.goalOverride = srcInst.goalOverride;
                 }
             }
         }
         
-        // Sincroniza calendários customizados do dia
         if (source[habitId].dailySchedule) {
              target[habitId].dailySchedule = source[habitId].dailySchedule;
         }
@@ -91,7 +90,7 @@ export async function mergeStates(local: AppState, incoming: AppState): Promise<
     const localTs = local.lastModified || 0;
     const incomingTs = incoming.lastModified || 0;
     
-    // Define base pelo mais recente para metadados simples
+    // Define base pelo mais recente
     let winner = localTs > incomingTs ? local : incoming;
     let loser = localTs > incomingTs ? incoming : local;
     
@@ -105,7 +104,7 @@ export async function mergeStates(local: AppState, incoming: AppState): Promise<
         }
     });
 
-    // 3. Mesclagem de Dados Diários (Notas/Overrides)
+    // 3. Mesclagem de Dados Diários
     for (const date in loser.dailyData) {
         if (!merged.dailyData[date]) {
             (merged.dailyData as any)[date] = loser.dailyData[date];
@@ -114,10 +113,10 @@ export async function mergeStates(local: AppState, incoming: AppState): Promise<
         }
     }
 
-    // 4. Mesclagem de Logs de Status (Bitmasks) usando união binária (OR)
+    // 4. Mesclagem de Logs de Status (Bitmasks)
     merged.monthlyLogs = HabitService.mergeLogs(winner.monthlyLogs, loser.monthlyLogs);
     
-    // 5. Garantir consistência temporal (Sempre incremental para o servidor aceitar)
+    // 5. Garantir consistência temporal
     merged.lastModified = Math.max(localTs, incomingTs, Date.now()) + 1;
 
     return merged;

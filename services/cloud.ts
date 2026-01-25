@@ -77,18 +77,11 @@ function splitIntoShards(appState: AppState): Record<string, any> {
     return shards;
 }
 
-/**
- * Limpa o cache local de hashes de sincronização.
- * Usado ao trocar de chave criptográfica para forçar um re-upload completo.
- */
 export function clearSyncHashCache() {
     lastSyncedHashes.clear();
     console.debug("[Sync] Hash cache cleared.");
 }
 
-/**
- * MurmurHash3 32-bit (Seedable).
- */
 function murmurHash3(key: string, seed: number = APP_VERSION): string {
     let remainder = key.length & 3;
     let bytes = key.length - remainder;
@@ -154,6 +147,7 @@ async function resolveConflictWithServerState(serverShards: Record<string, strin
         addSyncLog("Conflito detectado. Iniciando Smart Merge...", "info", "🔄");
         const remoteShards: Record<string, any> = {};
         for (const key in serverShards) {
+            // FIX: lastModified é metadado plano, não deve ser passado para o decriptador.
             if (key === 'lastModified') continue;
             remoteShards[key] = await runWorkerTask<any>('decrypt', serverShards[key], syncKey);
         }
@@ -169,8 +163,8 @@ async function resolveConflictWithServerState(serverShards: Record<string, strin
         };
 
         for (const key in remoteShards) {
-            if (key.startsWith('archive_')) {
-                remoteState.archives[key.replace('archive_', '')] = remoteShards[key];
+            if (key.startsWith('archive:')) {
+                remoteState.archives[key.replace('archive:', '')] = remoteShards[key];
             }
             if (key.startsWith('logs:')) {
                 remoteShards[key].forEach(([k, v]: [string, string]) => remoteState.monthlyLogs.set(k, BigInt(v)));
@@ -188,8 +182,8 @@ async function resolveConflictWithServerState(serverShards: Record<string, strin
         addSyncLog("Dados mesclados com sucesso.", "success", "✨");
         lastSyncedHashes.clear();
         syncStateWithCloud(mergedState, true);
-    } catch (error) {
-        addSyncLog("Falha na resolução de conflito.", "error", "❌");
+    } catch (error: any) {
+        addSyncLog(`Falha na resolução: ${error.message}`, "error", "❌");
         setSyncStatus('syncError');
     }
 }
@@ -208,6 +202,7 @@ async function performSync() {
         let changeCount = 0;
 
         for (const shardName in rawShards) {
+            // Estabilização do JSON para o Hash
             const currentHash = murmurHash3(JSON.stringify(rawShards[shardName]));
             const lastHash = lastSyncedHashes.get(shardName);
 
@@ -219,14 +214,16 @@ async function performSync() {
         }
 
         if (changeCount === 0) {
-            addSyncLog("Nenhuma alteração pendente para upload.", "info", "💨");
             setSyncStatus('syncSynced');
             isSyncInProgress = false;
             return;
         }
 
         addSyncLog(`Enviando ${changeCount} shards para nuvem...`, "info", "📤");
-        const payload = { lastModified: appState.lastModified, shards: dirtyShards };
+        
+        const safeTs = appState.lastModified || Date.now();
+        const payload = { lastModified: safeTs, shards: dirtyShards };
+        
         const response = await apiFetch('/api/sync', { method: 'POST', body: JSON.stringify(payload) }, true);
 
         if (response.status === 409) {
@@ -237,10 +234,11 @@ async function performSync() {
             setSyncStatus('syncSynced');
             document.dispatchEvent(new CustomEvent('habitsChanged')); 
         } else {
-            throw new Error(`Sync error: ${response.status}`);
+            const errorData = await response.json().catch(() => ({}));
+            throw new Error(errorData.error || `Status ${response.status}`);
         }
     } catch (error: any) {
-        addSyncLog(`Erro: ${error.message}`, "error", "⚠️");
+        addSyncLog(`Erro: Sync error: ${error.message}`, "error", "⚠️");
         setSyncStatus('syncError');
     } finally {
         isSyncInProgress = false;
@@ -265,6 +263,7 @@ async function reconstructStateFromShards(shards: Record<string, string>): Promi
     try {
         const decryptedShards: Record<string, any> = {};
         for (const key in shards) {
+            // FIX: Pula lastModified na decriptação aqui também
             if (key === 'lastModified') continue;
             decryptedShards[key] = await runWorkerTask<any>('decrypt', shards[key], syncKey);
             lastSyncedHashes.set(key, murmurHash3(JSON.stringify(decryptedShards[key])));
