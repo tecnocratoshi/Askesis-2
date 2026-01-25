@@ -117,8 +117,8 @@ export class HabitService {
     
     /**
      * INTELLIGENT MERGE (CRDT-Lite para Bitmasks).
-     * A operação de OR garante que a Lápide (bit 1) vença o status vazio, 
-     * e o status Done (bit 1) vença o Null original.
+     * Itera bloco por bloco (93 blocos por mês). O vencedor (maior timestamp) tem 
+     * prioridade absoluta no bloco. Se o vencedor for zero (sem dados), usa o perdedor.
      */
     static mergeLogs(winnerMap: Map<string, bigint> | undefined, loserMap: Map<string, bigint> | undefined): Map<string, bigint> {
         const result = new Map<string, bigint>(winnerMap || []);
@@ -126,7 +126,22 @@ export class HabitService {
 
         for (const [key, loserVal] of loserMap.entries()) {
             const winnerVal = result.get(key) || 0n;
-            result.set(key, winnerVal | loserVal);
+            let mergedVal = 0n;
+
+            // 31 dias * 3 períodos = 93 blocos de 3 bits
+            for (let i = 0n; i < 93n; i++) {
+                const shift = i * 3n;
+                const winnerBlock = (winnerVal >> shift) & 7n;
+                const loserBlock = (loserVal >> shift) & 7n;
+
+                // Se o vencedor tem um dado (status ou tombstone), ele ganha.
+                if (winnerBlock !== 0n) {
+                    mergedVal |= (winnerBlock << shift);
+                } else {
+                    mergedVal |= (loserBlock << shift);
+                }
+            }
+            result.set(key, mergedVal);
         }
         return result;
     }

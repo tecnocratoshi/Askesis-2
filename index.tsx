@@ -1,4 +1,3 @@
-
 /**
  * @license
  * SPDX-License-Identifier: Apache-2.0
@@ -68,16 +67,24 @@ const registerServiceWorker = () => {
 
 async function loadInitialState() {
     // 1. CARREGAMENTO IMEDIATO (Local-First)
-    // Lê do IndexedDB para dar TTI instantâneo
     await loadState();
 
     // 2. SINCRONIZAÇÃO PROATIVA (Background/Decisiva)
-    // fetchStateFromCloud agora compara timestamps e realiza Merge automático se necessário
     if (hasLocalSyncKey()) {
-        fetchStateFromCloud().catch(e => {
-            console.warn("Proactive boot sync deferred (offline?):", e);
-            setSyncStatus('syncError');
-        });
+        // Trava visual de boot
+        document.body.classList.add('is-booting');
+        
+        fetchStateFromCloud()
+            .then(() => {
+                document.body.classList.remove('is-booting');
+            })
+            .catch(e => {
+                console.warn("Proactive boot sync deferred (offline?):", e);
+                setSyncStatus('syncError');
+                document.body.classList.remove('is-booting');
+            });
+    } else {
+        state.initialSyncDone = true;
     }
 }
 
