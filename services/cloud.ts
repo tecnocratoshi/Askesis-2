@@ -50,10 +50,6 @@ export function runWorkerTask<T>(type: 'encrypt' | 'decrypt' | 'build-ai-prompt'
     });
 }
 
-/**
- * Prepara o estado para o Worker converter em Shards criptografados.
- * A separação agora é mais agressiva para garantir que o Worker produza apenas strings.
- */
 function splitIntoShards(appState: AppState): Record<string, any> {
     const shards: Record<string, any> = {};
     shards['core'] = {
@@ -65,13 +61,11 @@ function splitIntoShards(appState: AppState): Record<string, any> {
         quoteState: appState.quoteState
     };
     
-    // Logs binários são agrupados por mês.
     const groupedLogs = HabitService.getLogsGroupedByMonth();
     for (const month in groupedLogs) { 
         shards[`logs:${month}`] = groupedLogs[month]; 
     }
     
-    // Arquivos históricos.
     for (const year in appState.archives) { 
         shards[`archive:${year}`] = appState.archives[year]; 
     }
@@ -134,7 +128,6 @@ async function resolveConflictWithServerState(serverShards: Record<string, strin
         for (const key in serverShards) {
             if (key === 'lastModified') continue;
             try {
-                // ShardData is strictly a string (Base64)
                 const decrypted = await runWorkerTask<any>('decrypt', serverShards[key], syncKey);
                 remoteShards[key] = decrypted;
             } catch (err) {
@@ -162,7 +155,8 @@ async function resolveConflictWithServerState(serverShards: Record<string, strin
         const localState = getPersistableState();
         const mergedState = await mergeStates(localState, remoteState);
         
-        await persistStateLocally(mergedState, true);
+        // CRITICAL SEQUENCE: Gravar fisicamente ANTES de hidratar a memória
+        await persistStateLocally(mergedState);
         await loadState(mergedState);
         renderApp();
         
@@ -193,7 +187,6 @@ async function performSync() {
             const currentHash = murmurHash3(JSON.stringify(rawShards[shardName]));
             const lastHash = lastSyncedHashes.get(shardName);
             if (currentHash !== lastHash) {
-                // WORKER ENSURES RESULT IS STRING BASE64
                 const encrypted = await runWorkerTask<string>('encrypt', rawShards[shardName], syncKey);
                 encryptedShards[shardName] = encrypted;
                 lastSyncedHashes.set(shardName, currentHash);
@@ -210,7 +203,6 @@ async function performSync() {
         addSyncLog(`Sincronizando ${changeCount} pacotes...`, "info", "📤");
         const safeTs = appState.lastModified || Date.now();
         
-        // PAYLOAD STRUCTURE: strictly { lastModified: number, shards: Record<string, string> }
         const payload = { lastModified: safeTs, shards: encryptedShards };
         const response = await apiFetch('/api/sync', { 
             method: 'POST', 
@@ -296,30 +288,55 @@ export async function downloadRemoteState(): Promise<AppState | undefined> {
 }
 
 export async function fetchStateFromCloud(): Promise<AppState | undefined> {
-    if (!hasLocalSyncKey()) return undefined;
+    if (!hasLocalSyncKey()) {
+        state.initialSyncDone = true;
+        return undefined;
+    }
+    
+    setSyncStatus('syncSaving'); // Mostra "Verificando..." na UI
+    
     try {
         const response = await apiFetch('/api/sync', {}, true);
-        if (response.status === 304) { setSyncStatus('syncSynced'); return undefined; }
+        if (response.status === 304) { 
+            state.initialSyncDone = true;
+            setSyncStatus('syncSynced'); 
+            return undefined; 
+        }
         if (!response.ok) throw new Error("Cloud fetch failed");
+        
         const shards = await response.json();
-        if (!shards) return undefined;
+        if (!shards) {
+            state.initialSyncDone = true;
+            return undefined;
+        }
+
         const remoteState = await reconstructStateFromShards(shards);
-        if (!remoteState) return undefined;
+        if (!remoteState) {
+            state.initialSyncDone = true;
+            return undefined;
+        }
+
         const localState = getPersistableState();
         const remoteModified = remoteState.lastModified || 0, localModified = localState.lastModified || 0;
+        
         if (remoteModified > localModified) {
             addSyncLog("Atualização remota detectada.", "info", "☁️");
             const mergedState = await mergeStates(localState, remoteState);
-            await persistStateLocally(mergedState, true);
+            
+            // GARANTIA DE PERSISTÊNCIA: Grava no disco antes de atualizar a memória
+            await persistStateLocally(mergedState);
             await loadState(mergedState);
             renderApp();
         } else if (localModified > remoteModified) {
             addSyncLog("Sincronizando mudanças locais...", "info", "🚀");
             syncStateWithCloud(localState, true);
         }
+        
+        state.initialSyncDone = true;
         setSyncStatus('syncSynced');
         return remoteState;
     } catch (error) {
+        state.initialSyncDone = true;
         setSyncStatus('syncError');
         throw error;
     }

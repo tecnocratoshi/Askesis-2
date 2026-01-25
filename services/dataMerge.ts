@@ -29,7 +29,6 @@ function hydrateLogs(appState: AppState) {
                 if (val && typeof val === 'object' && val.__type === 'bigint') {
                     map.set(key, BigInt(val.val));
                 } else if (typeof val === 'string') {
-                    // SUPORTE HEX-STRING: Garante compatibilidade com o formato de persistência refinado.
                     const hexClean = val.startsWith('0x') ? val : '0x' + val;
                     map.set(key, BigInt(hexClean));
                 } else if (typeof val === 'bigint') {
@@ -106,8 +105,22 @@ export async function mergeStates(local: AppState, incoming: AppState): Promise<
     const localTs = local.lastModified || 0;
     const incomingTs = incoming.lastModified || 0;
     
-    let winner = localTs > incomingTs ? local : incoming;
-    let loser = localTs > incomingTs ? incoming : local;
+    // PROTEÇÃO CONTRA RESET ACIDENTAL [2025-06-05]:
+    // Se um lado não tem hábitos e o outro tem, o lado com hábitos é o vencedor de base,
+    // a menos que o timestamp seja massivamente diferente (anos).
+    let winner: AppState;
+    let loser: AppState;
+
+    if (local.habits.length === 0 && incoming.habits.length > 0) {
+        winner = incoming;
+        loser = local;
+    } else if (incoming.habits.length === 0 && local.habits.length > 0) {
+        winner = local;
+        loser = incoming;
+    } else {
+        winner = localTs >= incomingTs ? local : incoming;
+        loser = localTs >= incomingTs ? incoming : local;
+    }
     
     const merged: AppState = structuredClone(winner);
     const mergedHabitsMap = new Map<string, Habit>();
@@ -121,8 +134,6 @@ export async function mergeStates(local: AppState, incoming: AppState): Promise<
         } else {
             winnerHabit.scheduleHistory = mergeHabitHistories(winnerHabit.scheduleHistory, loserHabit.scheduleHistory);
             
-            // REGRA DE DELEÇÃO (TOMBSTONE WINS): Se qualquer um dos lados tiver deletedOn, o merged deve ter.
-            // Em caso de ambos terem, prevalece a data de deleção mais recente (maior string ISO).
             if (loserHabit.deletedOn) {
                 if (!winnerHabit.deletedOn || loserHabit.deletedOn > winnerHabit.deletedOn) {
                     winnerHabit.deletedOn = loserHabit.deletedOn;
@@ -145,6 +156,8 @@ export async function mergeStates(local: AppState, incoming: AppState): Promise<
     }
 
     merged.monthlyLogs = HabitService.mergeLogs(winner.monthlyLogs, loser.monthlyLogs);
+    
+    // O timestamp final deve ser maior que os dois
     merged.lastModified = Math.max(localTs, incomingTs, Date.now()) + 1;
 
     return merged;

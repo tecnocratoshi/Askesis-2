@@ -44,6 +44,10 @@ function getDB(): Promise<IDBDatabase> {
     return dbPromise;
 }
 
+/**
+ * Grava um estado específico no IndexedDB.
+ * Otimizado para separar JSON leve de binários pesados (Hex-Strings).
+ */
 async function saveSplitState(main: AppState): Promise<void> {
     const db = await getDB();
     return new Promise((resolve, reject) => {
@@ -52,13 +56,11 @@ async function saveSplitState(main: AppState): Promise<void> {
         
         const logs = main.monthlyLogs;
         const jsonState = { ...main };
+        // Remove logs do objeto principal para não duplicar no armazenamento
         delete (jsonState as any).monthlyLogs;
         
-        // Salva metadados e objetos JSON
         store.put(jsonState, STATE_JSON_KEY);
         
-        // CORREÇÃO BIGINT: Converte o Map em um objeto simples de strings hexadecimais.
-        // Isso resolve falhas de clonagem estruturada no IndexedDB e inconsistências de tipos no Safari/iOS.
         if (logs && logs.size > 0) {
             const serializedLogs: Record<string, string> = {};
             logs.forEach((v, k) => {
@@ -92,6 +94,7 @@ async function saveStateInternal(immediate = false, suppressSync = false) {
     if (activeSavePromise) await activeSavePromise;
 
     activeSavePromise = (async () => {
+        // Incrementa o timestamp para indicar mudança LOCAL
         state.lastModified = Math.max(Date.now(), state.lastModified + 1);
         const structuredData = getPersistableState();
         try {
@@ -164,8 +167,18 @@ export async function saveState(immediate = false, suppressSync = false): Promis
     }
 }
 
-export const persistStateLocally = (data: AppState, suppressSync = false) => {
-    return saveState(true, suppressSync);
+/**
+ * Gravação Imediata (Data Landing).
+ * Usado para dados vindo da nuvem: grava no disco exatamente o que recebeu, 
+ * sem alterar o timestamp lastModified original da nuvem.
+ */
+export const persistStateLocally = async (data: AppState) => {
+    if (activeSavePromise) await activeSavePromise;
+    try {
+        await saveSplitState(data);
+    } catch (e) {
+        console.error("[Persistence] Immediate Cloud Persistence Failed:", e);
+    }
 };
 
 export async function loadState(cloudState?: AppState): Promise<AppState | null> {
@@ -197,16 +210,13 @@ export async function loadState(cloudState?: AppState): Promise<AppState | null>
     if (mainState) {
         let migrated = migrateState(mainState, APP_VERSION);
         
-        // CORREÇÃO CARREGAMENTO BIGINT: Re-hidrata os valores a partir do objeto hex ou array.
         state.monthlyLogs = new Map();
         if (binaryLogsData) {
             if (typeof binaryLogsData === 'object' && !Array.isArray(binaryLogsData)) {
-                // Formato objeto de strings hex
                 Object.entries(binaryLogsData as Record<string, string>).forEach(([k, v]) => {
                     state.monthlyLogs.set(k, BigInt("0x" + v));
                 });
             } else if (Array.isArray(binaryLogsData)) {
-                // Formato legado de entries
                 binaryLogsData.forEach(([k, v]) => {
                     const hex = String(v).startsWith('0x') ? String(v) : "0x" + v;
                     state.monthlyLogs.set(k, BigInt(hex));
@@ -214,7 +224,6 @@ export async function loadState(cloudState?: AppState): Promise<AppState | null>
             }
         }
         
-        // Fallback para dados vindo do cloud que ainda usam monthlyLogsSerialized
         if ((migrated as any).monthlyLogsSerialized) {
             HabitService.deserializeLogsFromCloud((migrated as any).monthlyLogsSerialized);
             delete (migrated as any).monthlyLogsSerialized;

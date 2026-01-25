@@ -130,7 +130,6 @@ export interface PredefinedHabit extends HabitTemplate {
 }
 
 // --- CONSTANTS ---
-// BUMP V9: Migração para Esquema 9-bit com Tombstones (Lápides)
 export const APP_VERSION = 9; 
 export const STREAK_SEMI_CONSOLIDATED = 21;
 export const STREAK_CONSOLIDATED = 66;
@@ -142,7 +141,6 @@ export const HABIT_STATE = {
     DONE_PLUS: 3
 } as const;
 
-// UPDATE [V9]: 3 bits por período (Status: 2, Tombstone: 1)
 export const PERIOD_OFFSET: Record<TimeOfDay, number> = {
     'Morning': 0,
     'Afternoon': 3,
@@ -194,6 +192,7 @@ export const state: {
     lastAIResult: string | null;
     lastAIError?: string;
     syncState: 'syncInitial' | 'syncSaving' | 'syncSynced' | 'syncError';
+    initialSyncDone: boolean; // PROTEÇÃO DE BOOT
     fullCalendar: { year: number; month: number; };
     uiDirtyState: { calendarVisuals: boolean; habitListStructure: boolean; chartData: boolean; };
     monthlyLogs: Map<string, bigint>;
@@ -226,6 +225,7 @@ export const state: {
     hasSeenAIResult: true,
     lastAIResult: null,
     syncState: 'syncInitial',
+    initialSyncDone: false, // Inicia como falso até o fetch cloud completar
     fullCalendar: { year: new Date().getUTCFullYear(), month: new Date().getUTCMonth() },
     uiDirtyState: { calendarVisuals: true, habitListStructure: true, chartData: true },
     monthlyLogs: new Map(),

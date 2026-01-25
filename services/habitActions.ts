@@ -1,4 +1,3 @@
-
 /**
  * @license
  * SPDX-License-Identifier: Apache-2.0
@@ -69,15 +68,18 @@ function _notifyChanges(fullRebuild = false) {
         clearSelectorInternalCaches();
     }
     
-    // Invalidação Universal do Cache de Ativos (Essencial para Reatividade)
     clearActiveHabitsCache();
-    
     state.uiDirtyState.habitListStructure = state.uiDirtyState.calendarVisuals = true;
     
-    // REPAIR [2025-06-05]: Incrementa o selo temporal para garantir sincronização
-    state.lastModified = Math.max(Date.now(), state.lastModified + 1);
+    // PROTEÇÃO CONTRA ZOMBIE RESET [2025-06-05]:
+    // Se ainda estamos no boot (initialSyncDone === false), usamos incrementos mínimos
+    // para que a nuvem (com timestamps de horas atrás) ainda consiga ganhar o merge.
+    if (!state.initialSyncDone) {
+        state.lastModified = state.lastModified + 1;
+    } else {
+        state.lastModified = Math.max(Date.now(), state.lastModified + 1);
+    }
 
-    // Libera travas de interação remanescentes
     document.body.classList.remove('is-interaction-active', 'is-dragging-active');
     
     saveState();
@@ -87,8 +89,14 @@ function _notifyChanges(fullRebuild = false) {
 function _notifyPartialUIRefresh(date: string, habitIds: string[]) {
     invalidateCachesForDateChange(date, habitIds);
     state.uiDirtyState.calendarVisuals = true;
-    // REPAIR [2025-06-05]: Incrementa o selo temporal para garantir sincronização
-    state.lastModified = Math.max(Date.now(), state.lastModified + 1);
+    
+    // Mesma lógica de proteção de timestamp do _notifyChanges
+    if (!state.initialSyncDone) {
+        state.lastModified = state.lastModified + 1;
+    } else {
+        state.lastModified = Math.max(Date.now(), state.lastModified + 1);
+    }
+
     saveState();
     ['render-app', 'habitsChanged'].forEach(ev => document.dispatchEvent(new CustomEvent(ev)));
 }
@@ -207,25 +215,11 @@ const _applyDropFromNowOn = () => {
 
 const _applyHabitDeletion = async () => {
     const ctx = ActionContext.deletion;
-    if (!ctx) return ActionContext.reset();
-    const index = state.habits.findIndex(x => x.id === ctx.habitId);
-    if (index === -1) return ActionContext.reset();
-    const [deletedHabit] = state.habits.splice(index, 1);
-    Object.keys(state.dailyData).forEach(d => delete state.dailyData[d][ctx.habitId]);
-    if (state.monthlyLogs) {
-        const keysToRemove: string[] = [];
-        state.monthlyLogs.forEach((_, key) => { if (key.startsWith(ctx.habitId + '_')) keysToRemove.push(key); });
-        keysToRemove.forEach(k => state.monthlyLogs.delete(k));
-    }
-    const startYear = parseInt((deletedHabit.scheduleHistory[0]?.startDate || deletedHabit.createdOn).substring(0, 4), 10);
-    try {
-        const up = await runWorkerTask<AppState['archives']>('prune-habit', { habitId: ctx.habitId, archives: state.archives, startYear });
-        Object.keys(up).forEach(y => {
-            if (up[y] === "") delete state.archives[y];
-            else state.archives[y] = up[y];
-            state.unarchivedCache.delete(y);
-        });
-    } catch (e) { console.error(e); }
+    if (!ctx) return;
+    const habit = state.habits.find(h => h.id === ctx.habitId);
+    if (!habit) return ActionContext.reset();
+    
+    habit.deletedOn = getSafeDate(state.selectedDate);
     _notifyChanges(true);
     ActionContext.reset();
 };
@@ -278,13 +272,12 @@ export function saveHabitFromModal() {
         frequency: formData.frequency.type === 'specific_days_of_week' ? { ...formData.frequency, days: [...formData.frequency.days] } : { ...formData.frequency }
     };
 
-    // 1. Fechar o modal primeiro libera o ciclo de eventos da UI
     closeModal(ui.editHabitModal);
 
     if (isNew) {
         const existingHabit = state.habits.find(h => {
             const lastSchedule = h.scheduleHistory[h.scheduleHistory.length - 1];
-            if (h.graduatedOn || (lastSchedule.endDate && targetDate >= lastSchedule.endDate)) return false;
+            if (h.graduatedOn || h.deletedOn || (lastSchedule.endDate && targetDate >= lastSchedule.endDate)) return false;
             return getHabitDisplayInfo(h, targetDate).name.trim().toLowerCase() === nameToUse.trim().toLowerCase();
         });
         if (existingHabit) {
