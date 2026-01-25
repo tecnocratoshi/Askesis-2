@@ -1,4 +1,3 @@
-
 /**
  * @license
  * SPDX-License-Identifier: Apache-2.0
@@ -33,7 +32,6 @@ export class HabitService {
         
         if (log !== undefined) {
             const day = parseInt(dateISO.substring(8, 10), 10);
-            // 6 bits por dia (2 bits por período: Morning, Afternoon, Evening)
             const bitPos = BigInt(((day - 1) * 6) + PERIOD_OFFSET[time]);
             return Number((log >> bitPos) & 3n);
         }
@@ -60,7 +58,24 @@ export class HabitService {
     }
 
     /**
-     * Serialização para Transporte/Cloud (Strings Hex para JSON safety)
+     * Agrupa logs por mês para criação de shards granulares.
+     * Retorna um mapa onde a chave é o mês (YYYY-MM) e o valor é a lista de logs [habitId_YYYY-MM, hexVal].
+     */
+    static getLogsGroupedByMonth(): Record<string, [string, string][]> {
+        const groups: Record<string, [string, string][]> = {};
+        if (!state.monthlyLogs) return groups;
+
+        for (const [key, val] of state.monthlyLogs.entries()) {
+            // A chave é habitId_YYYY-MM. O mês está nos últimos 7 caracteres.
+            const month = key.split('_').pop() || 'unknown';
+            if (!groups[month]) groups[month] = [];
+            groups[month].push([key, "0x" + val.toString(16)]);
+        }
+        return groups;
+    }
+
+    /**
+     * Serialização legada (Mantida para compatibilidade se necessário)
      */
     static serializeLogsForCloud(): [string, string][] {
         if (!state.monthlyLogs) return [];
@@ -74,21 +89,18 @@ export class HabitService {
      */
     static deserializeLogsFromCloud(serialized: [string, string][]) {
         if (!Array.isArray(serialized)) return;
-        const map = new Map<string, bigint>();
         serialized.forEach(([key, hexVal]) => {
             try {
                 const hexClean = hexVal.startsWith("0x") ? hexVal : "0x" + hexVal;
-                map.set(key, BigInt(hexClean));
+                state.monthlyLogs.set(key, BigInt(hexClean));
             } catch (e) {
                 console.warn(`[HabitService] Skipping invalid hex log: ${key}`);
             }
         });
-        state.monthlyLogs = map;
     }
     
     /**
      * INTELLIGENT MERGE (CRDT-Lite para Bitmasks)
-     * Mantém conclusões de ambos os lados (União Binária).
      */
     static mergeLogs(winnerMap: Map<string, bigint> | undefined, loserMap: Map<string, bigint> | undefined): Map<string, bigint> {
         const result = new Map<string, bigint>(winnerMap || []);
@@ -101,9 +113,6 @@ export class HabitService {
         return result;
     }
 
-    /**
-     * Limpa todos os logs binários (Reseta histórico binário).
-     */
     static clearAllLogs() {
         state.monthlyLogs = new Map();
         state.uiDirtyState.chartData = true;

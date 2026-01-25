@@ -1,4 +1,3 @@
-
 /**
  * @license
  * SPDX-License-Identifier: Apache-2.0
@@ -10,32 +9,31 @@ export const config = {
   runtime: 'edge',
 };
 
-const MAX_PAYLOAD_SIZE = 1024 * 1024; // 1MB
+const MAX_PAYLOAD_SIZE = 1.5 * 1024 * 1024; // 1.5MB total hash limit
 
-const LUA_ATOMIC_UPDATE = `
+/**
+ * LUA ATOMIC SHARD UPDATE:
+ * 1. Verifica consistência temporal (Optimistic Locking) via field 'lastModified'.
+ * 2. Se OK, aplica HSET apenas nos shards enviados no payload.
+ * 3. Se CONFLITO, retorna todos os shards atuais para merge no cliente.
+ */
+const LUA_SHARDED_UPDATE = `
 local key = KEYS[1]
-local newPayload = ARGV[1]
-local newTs = tonumber(ARGV[2])
+local newTs = tonumber(ARGV[1])
+local shardsJson = ARGV[2]
 
-if not newTs then return { "ERROR", "Invalid Timestamp Argument" } end
+local currentTs = tonumber(redis.call("HGET", key, "lastModified") or 0)
 
-local currentVal = redis.call("GET", key)
-if not currentVal then
-    redis.call("SET", key, newPayload)
-    return { "OK" }
+if newTs < currentTs then
+    return { "CONFLICT", redis.call("HGETALL", key) }
 end
 
-local status, currentJson = pcall(cjson.decode, currentVal)
-if not status or type(currentJson) ~= "table" or type(currentJson.lastModified) ~= "number" then
-    redis.call("SET", key, newPayload)
-    return { "OK" }
+local shards = cjson.decode(shardsJson)
+for shardName, shardData in pairs(shards) do
+    redis.call("HSET", key, shardName, shardData)
 end
 
-local currentTs = tonumber(currentJson.lastModified)
-if newTs == currentTs then return { "NOT_MODIFIED" } end
-if newTs < currentTs then return { "CONFLICT", currentVal } end
-
-redis.call("SET", key, newPayload)
+redis.call("HSET", key, "lastModified", newTs)
 return { "OK" }
 `;
 
@@ -79,34 +77,38 @@ export default async function handler(req: Request) {
             return new Response(JSON.stringify({ error: 'Unauthorized' }), { status: 401, headers: HEADERS_BASE });
         }
         
-        const dataKey = `sync_v2:${keyHash}`;
+        // Versão 3: Sharded Storage (Hashes)
+        const dataKey = `sync_v3:${keyHash}`;
 
         if (req.method === 'GET') {
-            const storedData = await kv.get(dataKey);
-            // REPAIR: storedData já é uma string JSON ou objeto vindo do KV.
-            // Retornamos como objeto para o fetch.json() do cliente funcionar.
-            const responseBody = typeof storedData === 'string' ? storedData : JSON.stringify(storedData || null);
-            return new Response(responseBody, { status: 200, headers: HEADERS_BASE });
+            const allData = await kv.hgetall(dataKey);
+            if (!allData) return new Response('null', { status: 200, headers: HEADERS_BASE });
+            
+            // Reconstroi o objeto a partir do Hash do Redis
+            return new Response(JSON.stringify(allData), { status: 200, headers: HEADERS_BASE });
         }
 
         if (req.method === 'POST') {
-            const bodyText = await req.text();
-            if (bodyText.length > MAX_PAYLOAD_SIZE * 1.1) return new Response(JSON.stringify({ error: 'Payload Too Large' }), { status: 413, headers: HEADERS_BASE });
+            const body = await req.json();
+            const { lastModified, shards } = body;
 
-            let clientPayload;
-            try { clientPayload = JSON.parse(bodyText); } 
-            catch { return new Response(JSON.stringify({ error: 'Malformed JSON' }), { status: 400, headers: HEADERS_BASE }); }
+            if (!lastModified || !shards) {
+                return new Response(JSON.stringify({ error: 'Invalid Payload' }), { status: 400, headers: HEADERS_BASE });
+            }
 
-            const result = await kv.eval(LUA_ATOMIC_UPDATE, [dataKey], [bodyText, String(clientPayload.lastModified || Date.now())]) as [string, string?];
+            const result = await kv.eval(LUA_SHARDED_UPDATE, [dataKey], [String(lastModified), JSON.stringify(shards)]) as [string, any?];
             
             if (result[0] === 'OK') return new Response('{"success":true}', { status: 200, headers: HEADERS_BASE });
-            if (result[0] === 'NOT_MODIFIED') return new Response(null, { status: 304, headers: HEADERS_BASE });
-            if (result[0] === 'CONFLICT') return new Response(result[1], { status: 409, headers: HEADERS_BASE });
+            if (result[0] === 'CONFLICT') {
+                // Se houver conflito, retornamos o estado atual completo (shards) para o cliente fazer o Smart Merge
+                return new Response(JSON.stringify(result[1]), { status: 409, headers: HEADERS_BASE });
+            }
             return new Response(JSON.stringify({ error: result[1] }), { status: 400, headers: HEADERS_BASE });
         }
 
         return new Response(null, { status: 405 });
     } catch (error: any) {
+        console.error("KV Error:", error);
         return new Response(JSON.stringify({ error: 'Internal Server Error' }), { status: 500, headers: HEADERS_BASE });
     }
 }
