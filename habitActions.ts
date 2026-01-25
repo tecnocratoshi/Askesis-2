@@ -13,7 +13,7 @@ import {
     ensureHabitInstanceData, clearScheduleCache,
     clearActiveHabitsCache, invalidateCachesForDateChange, getPersistableState,
     HabitDayData, STREAK_SEMI_CONSOLIDATED, STREAK_CONSOLIDATED,
-    getHabitDailyInfoForDate, AppState, LANGUAGES, HABIT_STATE
+    getHabitDailyInfoForDate, AppState, HABIT_STATE
 } from './state';
 import { saveState, loadState, clearLocalPersistence } from './services/persistence';
 import { PREDEFINED_HABITS } from './data/predefinedHabits';
@@ -28,8 +28,8 @@ import {
     getSafeDate, addDays, toUTCIsoDateString
 } from './utils';
 import { 
-    closeModal, showConfirmationModal, openEditModal, renderAINotificationState,
-    clearHabitDomCache, renderStoicQuote
+    closeModal, showConfirmationModal, renderAINotificationState,
+    clearHabitDomCache
 } from './render';
 import { ui } from './render/ui';
 import { t, getTimeOfDayName, formatDate, formatList, getAiLanguageName } from './i18n'; 
@@ -37,12 +37,10 @@ import { runWorkerTask, addSyncLog } from './services/cloud';
 import { apiFetch, clearKey } from './services/api';
 import { HabitService } from './services/HabitService';
 
-// --- CONSTANTS ---
 const ARCHIVE_DAYS_THRESHOLD = 90;
 const BATCH_IDS_POOL: string[] = [];
 const BATCH_HABITS_POOL: Habit[] = [];
 
-// --- CONCURRENCY CONTROL ---
 let _isBatchOpActive = false;
 
 const ActionContext = {
@@ -57,29 +55,17 @@ const ActionContext = {
     }
 };
 
-// --- PRIVATE HELPERS ---
-
-/**
- * Notifica a UI sobre mudanças de dados.
- */
 function _notifyChanges(fullRebuild = false, immediate = false) {
     if (fullRebuild) {
         clearScheduleCache();
         clearHabitDomCache();
         clearSelectorInternalCaches();
     }
-    
     clearActiveHabitsCache();
     state.uiDirtyState.habitListStructure = state.uiDirtyState.calendarVisuals = true;
-    
-    // Incrementa timestamp para sync
     state.lastModified = Math.max(Date.now(), state.lastModified + 1);
-
     document.body.classList.remove('is-interaction-active', 'is-dragging-active');
-
-    // Salvamento com flag de urgência se solicitado
     saveState(immediate);
-    
     requestAnimationFrame(() => {
         ['render-app', 'habitsChanged'].forEach(ev => document.dispatchEvent(new CustomEvent(ev)));
     });
@@ -101,9 +87,6 @@ function _lockActionHabit(habitId: string): Habit | null {
     return h;
 }
 
-/**
- * Altera o histórico de horários para o futuro.
- */
 function _requestFutureScheduleChange(habitId: string, targetDate: string, updateFn: (s: HabitSchedule) => HabitSchedule, immediate = false) {
     const habit = state.habits.find(h => h.id === habitId);
     if (!habit || !/^\d{4}-\d{2}-\d{2}$/.test(targetDate)) return;
@@ -113,18 +96,11 @@ function _requestFutureScheduleChange(habitId: string, targetDate: string, updat
 
     if (idx !== -1) {
         const cur = history[idx];
-        if (cur.startDate === targetDate) {
-            history[idx] = updateFn({ ...cur });
-        } else {
-            cur.endDate = targetDate;
-            history.push(updateFn({ ...cur, startDate: targetDate, endDate: undefined }));
-        }
+        if (cur.startDate === targetDate) history[idx] = updateFn({ ...cur });
+        else { cur.endDate = targetDate; history.push(updateFn({ ...cur, startDate: targetDate, endDate: undefined })); }
     } else {
         const last = history[history.length - 1];
-        if (last) {
-            if (last.endDate && last.endDate > targetDate) last.endDate = targetDate;
-            history.push(updateFn({ ...last, startDate: targetDate, endDate: undefined }));
-        }
+        if (last) { if (last.endDate && last.endDate > targetDate) last.endDate = targetDate; history.push(updateFn({ ...last, startDate: targetDate, endDate: undefined })); }
     }
     history.sort((a, b) => a.startDate.localeCompare(b.startDate));
     habit.graduatedOn = undefined;
@@ -140,25 +116,17 @@ function _checkStreakMilestones(habit: Habit, dateISO: string) {
     }
 }
 
-// --- CONFIRMATION HANDLERS ---
-
 const _applyDropJustToday = () => {
     const ctx = ActionContext.drop, target = getSafeDate(state.selectedDate);
     if (!ctx) return ActionContext.reset();
-    
     const habit = state.habits.find(h => h.id === ctx.habitId);
     if (habit) {
         const info = ensureHabitDailyInfo(target, ctx.habitId), sch = [...getEffectiveScheduleForHabitOnDate(habit, target)];
         const fIdx = sch.indexOf(ctx.fromTime);
         if (fIdx > -1) sch.splice(fIdx, 1);
         if (!sch.includes(ctx.toTime)) sch.push(ctx.toTime);
-        
         const currentBit = HabitService.getStatus(ctx.habitId, target, ctx.fromTime);
-        if (currentBit !== HABIT_STATE.DONE) {
-            HabitService.setStatus(ctx.habitId, target, ctx.toTime, currentBit);
-            HabitService.setStatus(ctx.habitId, target, ctx.fromTime, HABIT_STATE.NULL);
-        }
-
+        if (currentBit !== HABIT_STATE.NULL) { HabitService.setStatus(ctx.habitId, target, ctx.toTime, currentBit); HabitService.setStatus(ctx.habitId, target, ctx.fromTime, HABIT_STATE.NULL); }
         if (info.instances[ctx.fromTime]) { info.instances[ctx.toTime] = info.instances[ctx.fromTime]; delete info.instances[ctx.fromTime]; }
         info.dailySchedule = sch;
         if (ctx.reorderInfo) reorderHabit(ctx.habitId, ctx.reorderInfo.id, ctx.reorderInfo.pos, true);
@@ -170,21 +138,14 @@ const _applyDropJustToday = () => {
 const _applyDropFromNowOn = () => {
     const ctx = ActionContext.drop, target = getSafeDate(state.selectedDate);
     if (!ctx) return ActionContext.reset();
-
-    const info = ensureHabitDailyInfo(target, ctx.habitId), curOverride = info.dailySchedule ? [...info.dailySchedule] : null;
+    const info = ensureHabitDailyInfo(target, ctx.habitId);
     info.dailySchedule = undefined;
-
     const currentBit = HabitService.getStatus(ctx.habitId, target, ctx.fromTime);
-    if (currentBit !== HABIT_STATE.NULL) {
-        HabitService.setStatus(ctx.habitId, target, ctx.toTime, currentBit);
-        HabitService.setStatus(ctx.habitId, target, ctx.fromTime, HABIT_STATE.NULL);
-    }
-
+    if (currentBit !== HABIT_STATE.NULL) { HabitService.setStatus(ctx.habitId, target, ctx.toTime, currentBit); HabitService.setStatus(ctx.habitId, target, ctx.fromTime, HABIT_STATE.NULL); }
     if (info.instances[ctx.fromTime]) { info.instances[ctx.toTime] = info.instances[ctx.fromTime]; delete info.instances[ctx.fromTime]; }
     if (ctx.reorderInfo) reorderHabit(ctx.habitId, ctx.reorderInfo.id, ctx.reorderInfo.pos, true);
-
     _requestFutureScheduleChange(ctx.habitId, target, (s) => {
-        const times = curOverride || [...s.times], fIdx = times.indexOf(ctx.fromTime);
+        const times = [...s.times], fIdx = times.indexOf(ctx.fromTime);
         if (fIdx > -1) times.splice(fIdx, 1);
         if (!times.includes(ctx.toTime)) times.push(ctx.toTime);
         return { ...s, times: times as readonly TimeOfDay[] };
@@ -195,35 +156,16 @@ const _applyDropFromNowOn = () => {
 const _applyHabitDeletion = async () => {
     const ctx = ActionContext.deletion;
     if (!ctx) return;
-    const h = state.habits.find(x => x.id === ctx.habitId);
-    if (!h) return ActionContext.reset();
+    const habit = state.habits.find(h => h.id === ctx.habitId);
+    if (!habit) return ActionContext.reset();
 
-    state.habits = state.habits.filter(x => x.id !== ctx.habitId);
-    Object.keys(state.dailyData).forEach(d => delete state.dailyData[d][ctx.habitId]);
-    if (state.monthlyLogs) {
-        const keysToRemove: string[] = [];
-        state.monthlyLogs.forEach((_, key) => { if (key.startsWith(ctx.habitId + '_')) keysToRemove.push(key); });
-        keysToRemove.forEach(k => state.monthlyLogs.delete(k));
-    }
-    const startYear = parseInt((h.scheduleHistory[0]?.startDate || h.createdOn).substring(0, 4), 10);
-    try {
-        const up = await runWorkerTask<AppState['archives']>('prune-habit', { habitId: ctx.habitId, archives: state.archives, startYear });
-        Object.keys(up).forEach(y => {
-            if (up[y] === "") delete state.archives[y];
-            else state.archives[y] = up[y];
-            state.unarchivedCache.delete(y);
-        });
-    } catch (e) { console.error(e); }
+    // GLOBAL TOMBSTONE FIX: Usamos deleção lógica para garantir que a intenção de apagar o hábito
+    // seja propagada corretamente pelo merge de sincronização (o bit de deletado vence o objeto ausente).
+    habit.deletedOn = getSafeDate(state.selectedDate);
     
     _notifyChanges(true, true);
     ActionContext.reset();
 };
-
-// --- PUBLIC ACTIONS ---
-
-export function checkAndAnalyzeDayContext(dateISO: string) {
-    // Implementado em services/analysis.ts
-}
 
 export function performArchivalCheck() {
     const run = async () => {
@@ -266,33 +208,17 @@ export function saveHabitFromModal() {
         goal: { ...formData.goal },
         frequency: formData.frequency.type === 'specific_days_of_week' ? { ...formData.frequency, days: [...formData.frequency.days] } : { ...formData.frequency }
     };
-    
     closeModal(ui.editHabitModal);
-
     if (isNew) {
         const existingHabit = state.habits.find(h => {
             const lastSchedule = h.scheduleHistory[h.scheduleHistory.length - 1];
-            if (h.graduatedOn || (lastSchedule.endDate && targetDate >= lastSchedule.endDate)) return false;
+            if (h.graduatedOn || h.deletedOn || (lastSchedule.endDate && targetDate >= lastSchedule.endDate)) return false;
             return getHabitDisplayInfo(h, targetDate).name.trim().toLowerCase() === nameToUse.trim().toLowerCase();
         });
         if (existingHabit) {
-            _requestFutureScheduleChange(existingHabit.id, targetDate, (s) => ({
-                ...s, icon: cleanFormData.icon, color: cleanFormData.color, goal: cleanFormData.goal,
-                philosophy: cleanFormData.philosophy ?? s.philosophy, name: cleanFormData.name,
-                nameKey: cleanFormData.nameKey, subtitleKey: cleanFormData.subtitleKey,
-                times: cleanFormData.times as readonly TimeOfDay[], frequency: cleanFormData.frequency,
-            }));
+            _requestFutureScheduleChange(existingHabit.id, targetDate, (s) => ({ ...s, icon: cleanFormData.icon, color: cleanFormData.color, goal: cleanFormData.goal, philosophy: cleanFormData.philosophy ?? s.philosophy, name: cleanFormData.name, nameKey: cleanFormData.nameKey, subtitleKey: cleanFormData.subtitleKey, times: cleanFormData.times as readonly TimeOfDay[], frequency: cleanFormData.frequency, }));
         } else {
-            state.habits.push({ 
-                id: generateUUID(), createdOn: targetDate, 
-                scheduleHistory: [{ 
-                    startDate: targetDate, times: cleanFormData.times as readonly TimeOfDay[], 
-                    frequency: cleanFormData.frequency, name: cleanFormData.name, 
-                    nameKey: cleanFormData.nameKey, subtitleKey: cleanFormData.subtitleKey, 
-                    scheduleAnchor: targetDate, icon: cleanFormData.icon, color: cleanFormData.color,
-                    goal: cleanFormData.goal, philosophy: cleanFormData.philosophy
-                }]
-            });
+            state.habits.push({ id: generateUUID(), createdOn: targetDate, scheduleHistory: [{ startDate: targetDate, times: cleanFormData.times as readonly TimeOfDay[], frequency: cleanFormData.frequency, name: cleanFormData.name, nameKey: cleanFormData.nameKey, subtitleKey: cleanFormData.subtitleKey, scheduleAnchor: targetDate, icon: cleanFormData.icon, color: cleanFormData.color, goal: cleanFormData.goal, philosophy: cleanFormData.philosophy }] });
             _notifyChanges(true);
         }
     } else {
@@ -300,12 +226,7 @@ export function saveHabitFromModal() {
         if (!h) return;
         ensureHabitDailyInfo(targetDate, h.id).dailySchedule = undefined;
         if (targetDate < h.createdOn) h.createdOn = targetDate;
-        _requestFutureScheduleChange(h.id, targetDate, (s) => ({ 
-            ...s, icon: cleanFormData.icon, color: cleanFormData.color, goal: cleanFormData.goal,
-            philosophy: cleanFormData.philosophy ?? s.philosophy, name: cleanFormData.name, 
-            nameKey: cleanFormData.nameKey, subtitleKey: cleanFormData.subtitleKey, 
-            times: cleanFormData.times as readonly TimeOfDay[], frequency: cleanFormData.frequency 
-        }));
+        _requestFutureScheduleChange(h.id, targetDate, (s) => ({ ...s, icon: cleanFormData.icon, color: cleanFormData.color, goal: cleanFormData.goal, philosophy: cleanFormData.philosophy ?? s.philosophy, name: cleanFormData.name, nameKey: cleanFormData.nameKey, subtitleKey: cleanFormData.subtitleKey, times: cleanFormData.times as readonly TimeOfDay[], frequency: cleanFormData.frequency }));
     }
 }
 
@@ -318,20 +239,12 @@ export async function performAIAnalysis(type: 'monthly' | 'quarterly' | 'histori
         const trans: Record<string, string> = { promptTemplate: t(type === 'monthly' ? 'aiPromptMonthly' : (type === 'quarterly' ? 'aiPromptQuarterly' : 'aiPromptGeneral')), aiDaysUnit: t('unitDays', { count: 2 }) };
         ['aiPromptGraduatedSection', 'aiPromptNoData', 'aiPromptNone', 'aiSystemInstruction', 'aiPromptHabitDetails', 'aiVirtue', 'aiDiscipline', 'aiSphere', 'stoicVirtueWisdom', 'stoicVirtueCourage', 'stoicVirtueJustice', 'stoicVirtueTemperance', 'stoicDisciplineDesire', 'stoicDisciplineAction', 'stoicDisciplineAssent', 'governanceSphereBiological', 'governanceSphereStructural', 'governanceSphereSocial', 'governanceSphereMental', 'aiPromptNotesSectionHeader', 'aiStreakLabel', 'aiSuccessRateLabelMonthly', 'aiSuccessRateLabelQuarterly', 'aiSuccessRateLabelHistorical', 'aiHistoryChange', 'aiHistoryChangeFrequency', 'aiHistoryChangeGoal', 'aiHistoryChangeTimes'].forEach(k => trans[k] = t(k));
         PREDEFINED_HABITS.forEach(h => trans[h.nameKey] = t(h.nameKey));
-        
         const logsSerialized = HabitService.serializeLogsForCloud();
-        const { prompt, systemInstruction } = await runWorkerTask<any>('build-ai-prompt', { 
-            analysisType: type, habits: state.habits, dailyData: state.dailyData, 
-            archives: state.archives, monthlyLogsSerialized: logsSerialized, 
-            languageName: getAiLanguageName(), translations: trans, todayISO: getTodayUTCIso() 
-        });
-        
+        const { prompt, systemInstruction } = await runWorkerTask<any>('build-ai-prompt', { analysisType: type, habits: state.habits, dailyData: state.dailyData, archives: state.archives, monthlyLogsSerialized: logsSerialized, languageName: getAiLanguageName(), translations: trans, todayISO: getTodayUTCIso() });
         if (id !== state.aiReqId) return;
         const res = await apiFetch('/api/analyze', { method: 'POST', body: JSON.stringify({ prompt, systemInstruction }) });
         if (id === state.aiReqId) { state.lastAIResult = await res.text(); state.aiState = 'completed'; addSyncLog("Análise IA concluída.", 'success', '✨'); }
-    } catch (e) { 
-        if (id === state.aiReqId) { state.lastAIError = String(e); state.aiState = 'error'; state.lastAIResult = t('aiErrorGeneric'); addSyncLog("Erro na análise IA.", 'error', '❌'); } 
-    } finally { if (id === state.aiReqId) { saveState(); renderAINotificationState(); } }
+    } catch (e) { if (id === state.aiReqId) { state.lastAIError = String(e); state.aiState = 'error'; state.lastAIResult = t('aiErrorGeneric'); addSyncLog("Erro na análise IA.", 'error', '❌'); } } finally { if (id === state.aiReqId) { saveState(); renderAINotificationState(); } }
 }
 
 export function importData() {
@@ -340,13 +253,7 @@ export function importData() {
         const file = (e.target as HTMLInputElement).files?.[0]; if (!file) return;
         try {
             const data = JSON.parse(await file.text());
-            if (data.habits && data.version) { 
-                await loadState(data); 
-                await saveState(); 
-                ['render-app', 'habitsChanged'].forEach(ev => document.dispatchEvent(new CustomEvent(ev))); 
-                closeModal(ui.manageModal); 
-                showConfirmationModal(t('importSuccess'), () => {}, { title: t('privacyLabel'), confirmText: 'OK', hideCancel: true }); 
-            } else throw 0;
+            if (data.habits && data.version) { await loadState(data); await saveState(); ['render-app', 'habitsChanged'].forEach(ev => document.dispatchEvent(new CustomEvent(ev))); closeModal(ui.manageModal); showConfirmationModal(t('importSuccess'), () => {}, { title: t('privacyLabel'), confirmText: 'OK', hideCancel: true }); } else throw 0;
         } catch { showConfirmationModal(t('importError'), () => {}, { title: t('importError'), confirmText: 'OK', hideCancel: true, confirmButtonStyle: 'danger' }); }
     };
     input.click();
@@ -397,10 +304,7 @@ export function requestHabitEndingFromModal(habitId: string) {
     const h = _lockActionHabit(habitId), target = getSafeDate(state.selectedDate); if (!h) return;
     ActionContext.ending = { habitId, targetDate: target };
     showConfirmationModal(t('confirmEndHabit', { habitName: getHabitDisplayInfo(h, target).name, date: formatDate(parseUTCIsoDate(target), { day: 'numeric', month: 'long', timeZone: 'UTC' }) }), 
-        () => { 
-            _requestFutureScheduleChange(habitId, target, s => ({ ...s, endDate: target }), true); 
-            ActionContext.reset(); 
-        }, { confirmButtonStyle: 'danger', confirmText: t('endButton'), onCancel: () => ActionContext.reset() });
+        () => { _requestFutureScheduleChange(habitId, target, s => ({ ...s, endDate: target }), true); ActionContext.reset(); }, { confirmButtonStyle: 'danger', confirmText: t('endButton'), onCancel: () => ActionContext.reset() });
 }
 
 export function requestHabitPermanentDeletion(habitId: string) {
@@ -409,14 +313,7 @@ export function requestHabitPermanentDeletion(habitId: string) {
         showConfirmationModal(t('confirmPermanentDelete', { habitName: getHabitDisplayInfo(state.habits.find(x => x.id === habitId)!).name }), _applyHabitDeletion, { confirmButtonStyle: 'danger', confirmText: t('deleteButton'), onCancel: () => ActionContext.reset() });
     }
 }
-export function graduateHabit(habitId: string) { 
-    const h = state.habits.find(x => x.id === habitId); 
-    if (h) { 
-        h.graduatedOn = getSafeDate(state.selectedDate); 
-        _notifyChanges(true, true); 
-        triggerHaptic('success'); 
-    } 
-}
+export function graduateHabit(habitId: string) { const h = state.habits.find(x => x.id === habitId); if (h) { h.graduatedOn = getSafeDate(state.selectedDate); _notifyChanges(true, true); triggerHaptic('success'); } }
 export async function resetApplicationData() { 
     state.habits = []; state.dailyData = {}; state.archives = {}; state.notificationsShown = []; state.pending21DayHabitIds = []; state.pendingConsolidationHabitIds = []; state.monthlyLogs = new Map();
     document.dispatchEvent(new CustomEvent('render-app'));
@@ -439,11 +336,7 @@ export function setGoalOverride(habitId: string, d: string, t: TimeOfDay, v: num
 export function requestHabitTimeRemoval(habitId: string, time: TimeOfDay) {
     const h = _lockActionHabit(habitId), target = getSafeDate(state.selectedDate); if (!h) return;
     ActionContext.removal = { habitId, time, targetDate: target };
-    showConfirmationModal(t('confirmRemoveTimePermanent', { habitName: getHabitDisplayInfo(h, target).name, time: getTimeOfDayName(time) }), () => { 
-        ensureHabitDailyInfo(target, habitId).dailySchedule = undefined; 
-        _requestFutureScheduleChange(habitId, target, s => ({ ...s, times: s.times.filter(x => x !== time) as readonly TimeOfDay[] }), true); 
-        ActionContext.reset(); 
-    }, { title: t('modalRemoveTimeTitle'), confirmText: t('deleteButton'), confirmButtonStyle: 'danger', onCancel: () => ActionContext.reset() });
+    showConfirmationModal(t('confirmRemoveTimePermanent', { habitName: getHabitDisplayInfo(h, target).name, time: getTimeOfDayName(time) }), () => { ensureHabitDailyInfo(target, habitId).dailySchedule = undefined; _requestFutureScheduleChange(habitId, target, s => ({ ...s, times: s.times.filter(x => x !== time) as readonly TimeOfDay[] }), true); ActionContext.reset(); }, { title: t('modalRemoveTimeTitle'), confirmText: t('deleteButton'), confirmButtonStyle: 'danger', onCancel: () => ActionContext.reset() });
 }
 export function exportData() {
     const stateToExport = getPersistableState();
@@ -461,9 +354,7 @@ function _processAndFormatCelebrations(pendingIds: string[], translationKey: 'ai
     const habitNames = formatList(habitNamesList);
     pendingIds.forEach(id => { 
         const celebrationId = `${id}-${streakMilestone}`; 
-        if (!state.notificationsShown.includes(celebrationId)) {
-            state.notificationsShown.push(celebrationId);
-        }
+        if (!state.notificationsShown.includes(celebrationId)) state.notificationsShown.push(celebrationId);
     });
     return t(translationKey, { count: pendingIds.length, habitNames });
 }

@@ -72,6 +72,7 @@ export interface Habit {
     readonly id: string;
     createdOn: string; 
     graduatedOn?: string; 
+    deletedOn?: string; // LOGICAL DELETION (Tombstone)
     scheduleHistory: HabitSchedule[];
 }
 

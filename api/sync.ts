@@ -16,18 +16,23 @@ local shardsJson = ARGV[2]
 
 local currentTs = tonumber(redis.call("HGET", key, "lastModified") or 0)
 
+-- Optimistic Concurrency Control
 if newTs < currentTs then
     local all = redis.call("HGETALL", key)
     return { "CONFLICT", all }
 end
 
+-- Robust JSON Parsing
 local status, shards = pcall(cjson.decode, shardsJson)
 if not status then
     return { "ERROR", "Invalid JSON in shards" }
 end
 
+-- Atomic Shard Update
 for shardName, shardData in pairs(shards) do
-    redis.call("HSET", key, shardName, shardData)
+    if type(shardData) == "string" then
+        redis.call("HSET", key, shardName, shardData)
+    end
 end
 
 redis.call("HSET", key, "lastModified", newTs)

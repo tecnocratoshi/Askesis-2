@@ -54,10 +54,17 @@ async function saveSplitState(main: AppState): Promise<void> {
         const jsonState = { ...main };
         delete (jsonState as any).monthlyLogs;
         
+        // Salva metadados e objetos JSON
         store.put(jsonState, STATE_JSON_KEY);
         
+        // CORREÇÃO BIGINT: Converte o Map em um objeto simples de strings hexadecimais.
+        // Isso resolve falhas de clonagem estruturada no IndexedDB e inconsistências de tipos no Safari/iOS.
         if (logs && logs.size > 0) {
-            store.put(logs, STATE_BINARY_KEY);
+            const serializedLogs: Record<string, string> = {};
+            logs.forEach((v, k) => {
+                serializedLogs[k] = v.toString(16);
+            });
+            store.put(serializedLogs, STATE_BINARY_KEY);
         }
         
         tx.oncomplete = () => resolve();
@@ -82,7 +89,6 @@ function pruneOrphanedDailyData(habits: readonly Habit[], dailyData: Record<stri
 }
 
 async function saveStateInternal(immediate = false, suppressSync = false) {
-    // Serializa o acesso ao IDB para evitar colisões de transação
     if (activeSavePromise) await activeSavePromise;
 
     activeSavePromise = (async () => {
@@ -128,11 +134,6 @@ export async function flushSaveBuffer(): Promise<void> {
     }
 }
 
-/**
- * Persiste o estado da aplicação.
- * @param immediate Se true, limpa o buffer e salva instantaneamente.
- * @param suppressSync Se true, evita disparar o syncHandler.
- */
 export async function saveState(immediate = false, suppressSync = false): Promise<void> {
     if (saveTimeout !== undefined) {
         clearTimeout(saveTimeout);
@@ -169,7 +170,7 @@ export const persistStateLocally = (data: AppState, suppressSync = false) => {
 
 export async function loadState(cloudState?: AppState): Promise<AppState | null> {
     let mainState = cloudState;
-    let binaryLogs: any;
+    let binaryLogsData: any;
 
     if (!mainState) {
         try {
@@ -183,7 +184,7 @@ export async function loadState(cloudState?: AppState): Promise<AppState | null>
                 
                 tx.oncomplete = () => {
                     mainState = reqMain.result;
-                    binaryLogs = reqLogs.result;
+                    binaryLogsData = reqLogs.result;
                     resolve();
                 };
                 tx.onerror = () => resolve();
@@ -196,17 +197,29 @@ export async function loadState(cloudState?: AppState): Promise<AppState | null>
     if (mainState) {
         let migrated = migrateState(mainState, APP_VERSION);
         
-        if (binaryLogs instanceof Map && binaryLogs.size > 0) {
-            state.monthlyLogs = binaryLogs as Map<string, bigint>;
-        } 
-        else if ((migrated as any).monthlyLogsSerialized) {
+        // CORREÇÃO CARREGAMENTO BIGINT: Re-hidrata os valores a partir do objeto hex ou array.
+        state.monthlyLogs = new Map();
+        if (binaryLogsData) {
+            if (typeof binaryLogsData === 'object' && !Array.isArray(binaryLogsData)) {
+                // Formato objeto de strings hex
+                Object.entries(binaryLogsData as Record<string, string>).forEach(([k, v]) => {
+                    state.monthlyLogs.set(k, BigInt("0x" + v));
+                });
+            } else if (Array.isArray(binaryLogsData)) {
+                // Formato legado de entries
+                binaryLogsData.forEach(([k, v]) => {
+                    const hex = String(v).startsWith('0x') ? String(v) : "0x" + v;
+                    state.monthlyLogs.set(k, BigInt(hex));
+                });
+            }
+        }
+        
+        // Fallback para dados vindo do cloud que ainda usam monthlyLogsSerialized
+        if ((migrated as any).monthlyLogsSerialized) {
             HabitService.deserializeLogsFromCloud((migrated as any).monthlyLogsSerialized);
             delete (migrated as any).monthlyLogsSerialized;
-        }
-        else if (migrated.monthlyLogs instanceof Map) {
+        } else if (migrated.monthlyLogs instanceof Map && state.monthlyLogs.size === 0) {
             state.monthlyLogs = migrated.monthlyLogs;
-        } else {
-            state.monthlyLogs = new Map();
         }
 
         state.habits = [...(migrated.habits || [])];

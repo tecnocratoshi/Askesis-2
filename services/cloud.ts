@@ -50,6 +50,10 @@ export function runWorkerTask<T>(type: 'encrypt' | 'decrypt' | 'build-ai-prompt'
     });
 }
 
+/**
+ * Prepara o estado para o Worker converter em Shards criptografados.
+ * A separação agora é mais agressiva para garantir que o Worker produza apenas strings.
+ */
 function splitIntoShards(appState: AppState): Record<string, any> {
     const shards: Record<string, any> = {};
     shards['core'] = {
@@ -60,9 +64,18 @@ function splitIntoShards(appState: AppState): Record<string, any> {
         hasOnboarded: appState.hasOnboarded,
         quoteState: appState.quoteState
     };
+    
+    // Logs binários são agrupados por mês.
     const groupedLogs = HabitService.getLogsGroupedByMonth();
-    for (const month in groupedLogs) { shards[`logs:${month}`] = groupedLogs[month]; }
-    for (const year in appState.archives) { shards[`archive:${year}`] = appState.archives[year]; }
+    for (const month in groupedLogs) { 
+        shards[`logs:${month}`] = groupedLogs[month]; 
+    }
+    
+    // Arquivos históricos.
+    for (const year in appState.archives) { 
+        shards[`archive:${year}`] = appState.archives[year]; 
+    }
+    
     return shards;
 }
 
@@ -102,7 +115,6 @@ export function addSyncLog(msg: string, type: 'success' | 'error' | 'info' = 'in
     if (!state.syncLogs) state.syncLogs = [];
     state.syncLogs.push({ time: Date.now(), msg, type, icon });
     if (state.syncLogs.length > 50) state.syncLogs.shift();
-    // Persiste os logs imediatamente para que fiquem disponíveis mesmo se o sync falhar e o usuário abrir o modal
     saveState(true, true);
     console.debug(`[Sync Log] ${msg}`);
 }
@@ -117,12 +129,14 @@ async function resolveConflictWithServerState(serverShards: Record<string, strin
     if (!syncKey) return setSyncStatus('syncError');
     
     try {
-        addSyncLog("Conflito de versão. Mesclando dados remotos...", "info", "🔄");
+        addSyncLog("Conflito detectado. Mesclando dados...", "info", "🔄");
         const remoteShards: Record<string, any> = {};
         for (const key in serverShards) {
             if (key === 'lastModified') continue;
             try {
-                remoteShards[key] = await runWorkerTask<any>('decrypt', serverShards[key], syncKey);
+                // ShardData is strictly a string (Base64)
+                const decrypted = await runWorkerTask<any>('decrypt', serverShards[key], syncKey);
+                remoteShards[key] = decrypted;
             } catch (err) {
                 console.warn(`[Sync] Failed to decrypt shard ${key}, skipping.`, err);
             }
@@ -140,7 +154,9 @@ async function resolveConflictWithServerState(serverShards: Record<string, strin
 
         for (const key in remoteShards) {
             if (key.startsWith('archive:')) { remoteState.archives[key.replace('archive:', '')] = remoteShards[key]; }
-            if (key.startsWith('logs:')) { remoteShards[key].forEach(([k, v]: [string, string]) => remoteState.monthlyLogs.set(k, BigInt(v))); }
+            if (key.startsWith('logs:')) { 
+                remoteShards[key].forEach(([k, v]: [string, string]) => remoteState.monthlyLogs.set(k, BigInt(v))); 
+            }
         }
 
         const localState = getPersistableState();
@@ -170,14 +186,16 @@ async function performSync() {
 
     try {
         const rawShards = splitIntoShards(appState);
-        const dirtyShards: Record<string, string> = {};
+        const encryptedShards: Record<string, string> = {};
         let changeCount = 0;
 
         for (const shardName in rawShards) {
             const currentHash = murmurHash3(JSON.stringify(rawShards[shardName]));
             const lastHash = lastSyncedHashes.get(shardName);
             if (currentHash !== lastHash) {
-                dirtyShards[shardName] = await runWorkerTask<string>('encrypt', rawShards[shardName], syncKey);
+                // WORKER ENSURES RESULT IS STRING BASE64
+                const encrypted = await runWorkerTask<string>('encrypt', rawShards[shardName], syncKey);
+                encryptedShards[shardName] = encrypted;
                 lastSyncedHashes.set(shardName, currentHash);
                 changeCount++;
             }
@@ -191,8 +209,13 @@ async function performSync() {
 
         addSyncLog(`Sincronizando ${changeCount} pacotes...`, "info", "📤");
         const safeTs = appState.lastModified || Date.now();
-        const payload = { lastModified: safeTs, shards: dirtyShards };
-        const response = await apiFetch('/api/sync', { method: 'POST', body: JSON.stringify(payload) }, true);
+        
+        // PAYLOAD STRUCTURE: strictly { lastModified: number, shards: Record<string, string> }
+        const payload = { lastModified: safeTs, shards: encryptedShards };
+        const response = await apiFetch('/api/sync', { 
+            method: 'POST', 
+            body: JSON.stringify(payload) 
+        }, true);
 
         if (response.status === 409) {
             lastSyncedHashes.clear();
@@ -250,7 +273,9 @@ async function reconstructStateFromShards(shards: Record<string, string>): Promi
         };
         for (const key in decryptedShards) {
             if (key.startsWith('archive:')) { result.archives[key.replace('archive:', '')] = decryptedShards[key]; }
-            if (key.startsWith('logs:')) { decryptedShards[key].forEach(([k, v]: [string, string]) => result.monthlyLogs.set(k, BigInt(v))); }
+            if (key.startsWith('logs:')) { 
+                decryptedShards[key].forEach(([k, v]: [string, string]) => result.monthlyLogs.set(k, BigInt(v))); 
+            }
         }
         return result;
     } catch (e) {
