@@ -63,7 +63,15 @@ function _notifyChanges(fullRebuild = false, immediate = false) {
     }
     clearActiveHabitsCache();
     state.uiDirtyState.habitListStructure = state.uiDirtyState.calendarVisuals = true;
-    state.lastModified = Math.max(Date.now(), state.lastModified + 1);
+    
+    // BOOT LOCK PROTECTION: Durante o boot, usamos timestamp incremental simples.
+    // Após o sync, usamos o relógio real para garantir LWW.
+    if (!state.initialSyncDone) {
+        state.lastModified = state.lastModified + 1;
+    } else {
+        state.lastModified = Math.max(Date.now(), state.lastModified + 1);
+    }
+
     document.body.classList.remove('is-interaction-active', 'is-dragging-active');
     saveState(immediate);
     requestAnimationFrame(() => {
@@ -74,7 +82,13 @@ function _notifyChanges(fullRebuild = false, immediate = false) {
 function _notifyPartialUIRefresh(date: string, habitIds: string[]) {
     invalidateCachesForDateChange(date, habitIds);
     state.uiDirtyState.calendarVisuals = true;
-    state.lastModified = Math.max(Date.now(), state.lastModified + 1);
+    
+    if (!state.initialSyncDone) {
+        state.lastModified = state.lastModified + 1;
+    } else {
+        state.lastModified = Math.max(Date.now(), state.lastModified + 1);
+    }
+
     saveState();
     ['render-app', 'habitsChanged'].forEach(ev => document.dispatchEvent(new CustomEvent(ev)));
 }
@@ -159,10 +173,7 @@ const _applyHabitDeletion = async () => {
     const habit = state.habits.find(h => h.id === ctx.habitId);
     if (!habit) return ActionContext.reset();
 
-    // GLOBAL TOMBSTONE FIX: Usamos deleção lógica para garantir que a intenção de apagar o hábito
-    // seja propagada corretamente pelo merge de sincronização (o bit de deletado vence o objeto ausente).
     habit.deletedOn = getSafeDate(state.selectedDate);
-    
     _notifyChanges(true, true);
     ActionContext.reset();
 };
@@ -260,6 +271,9 @@ export function importData() {
 }
 
 export function toggleHabitStatus(habitId: string, time: TimeOfDay, dateISO: string) {
+    // BOOT LOCK: Previne escrita até que o sync inicial (se houver) termine
+    if (!state.initialSyncDone) return;
+
     const currentStatus = HabitService.getStatus(habitId, dateISO, time);
     let nextStatus: number = HABIT_STATE.DONE;
     if (currentStatus === HABIT_STATE.DONE || currentStatus === HABIT_STATE.DONE_PLUS) nextStatus = HABIT_STATE.DEFERRED;
@@ -276,6 +290,9 @@ export function toggleHabitStatus(habitId: string, time: TimeOfDay, dateISO: str
 
 export function markAllHabitsForDate(dateISO: string, status: 'completed' | 'snoozed'): boolean {
     if (_isBatchOpActive) return false;
+    // BOOT LOCK
+    if (!state.initialSyncDone) return false;
+
     _isBatchOpActive = true;
     const dateObj = parseUTCIsoDate(dateISO);
     let changed = false; BATCH_IDS_POOL.length = BATCH_HABITS_POOL.length = 0;
@@ -294,6 +311,9 @@ export function markAllHabitsForDate(dateISO: string, status: 'completed' | 'sno
 }
 
 export function handleHabitDrop(habitId: string, fromTime: TimeOfDay, toTime: TimeOfDay, reorderInfo?: any) {
+    // BOOT LOCK
+    if (!state.initialSyncDone) return;
+
     const h = _lockActionHabit(habitId); if (!h) return;
     ActionContext.drop = { habitId, fromTime, toTime, reorderInfo };
     showConfirmationModal(t('confirmHabitMove', { habitName: getHabitDisplayInfo(h, state.selectedDate).name, oldTime: getTimeOfDayName(fromTime), newTime: getTimeOfDayName(toTime) }), 
@@ -301,6 +321,7 @@ export function handleHabitDrop(habitId: string, fromTime: TimeOfDay, toTime: Ti
 }
 
 export function requestHabitEndingFromModal(habitId: string) {
+    if (!state.initialSyncDone) return;
     const h = _lockActionHabit(habitId), target = getSafeDate(state.selectedDate); if (!h) return;
     ActionContext.ending = { habitId, targetDate: target };
     showConfirmationModal(t('confirmEndHabit', { habitName: getHabitDisplayInfo(h, target).name, date: formatDate(parseUTCIsoDate(target), { day: 'numeric', month: 'long', timeZone: 'UTC' }) }), 
@@ -308,12 +329,13 @@ export function requestHabitEndingFromModal(habitId: string) {
 }
 
 export function requestHabitPermanentDeletion(habitId: string) {
+    if (!state.initialSyncDone) return;
     if (_lockActionHabit(habitId)) {
         ActionContext.deletion = { habitId };
         showConfirmationModal(t('confirmPermanentDelete', { habitName: getHabitDisplayInfo(state.habits.find(x => x.id === habitId)!).name }), _applyHabitDeletion, { confirmButtonStyle: 'danger', confirmText: t('deleteButton'), onCancel: () => ActionContext.reset() });
     }
 }
-export function graduateHabit(habitId: string) { const h = state.habits.find(x => x.id === habitId); if (h) { h.graduatedOn = getSafeDate(state.selectedDate); _notifyChanges(true, true); triggerHaptic('success'); } }
+export function graduateHabit(habitId: string) { if (!state.initialSyncDone) return; const h = state.habits.find(x => x.id === habitId); if (h) { h.graduatedOn = getSafeDate(state.selectedDate); _notifyChanges(true, true); triggerHaptic('success'); } }
 export async function resetApplicationData() { 
     state.habits = []; state.dailyData = {}; state.archives = {}; state.notificationsShown = []; state.pending21DayHabitIds = []; state.pendingConsolidationHabitIds = []; state.monthlyLogs = new Map();
     document.dispatchEvent(new CustomEvent('render-app'));
@@ -321,6 +343,9 @@ export async function resetApplicationData() {
 }
 export function handleSaveNote() { if (!state.editingNoteFor) return; const { habitId, date, time } = state.editingNoteFor, val = ui.notesTextarea.value.trim(), inst = ensureHabitInstanceData(date, habitId, time); if ((inst.note || '') !== val) { inst.note = val || undefined; state.uiDirtyState.habitListStructure = true; saveState(); document.dispatchEvent(new CustomEvent('render-app')); } closeModal(ui.notesModal); }
 export function setGoalOverride(habitId: string, d: string, t: TimeOfDay, v: number) { 
+    // BOOT LOCK
+    if (!state.initialSyncDone) return;
+
     try {
         const h = state.habits.find(x => x.id === habitId); if (!h) return;
         ensureHabitInstanceData(d, habitId, t).goalOverride = v;
@@ -334,6 +359,7 @@ export function setGoalOverride(habitId: string, d: string, t: TimeOfDay, v: num
     } catch (e) { console.error(e); } 
 }
 export function requestHabitTimeRemoval(habitId: string, time: TimeOfDay) {
+    if (!state.initialSyncDone) return;
     const h = _lockActionHabit(habitId), target = getSafeDate(state.selectedDate); if (!h) return;
     ActionContext.removal = { habitId, time, targetDate: target };
     showConfirmationModal(t('confirmRemoveTimePermanent', { habitName: getHabitDisplayInfo(h, target).name, time: getTimeOfDayName(time) }), () => { ensureHabitDailyInfo(target, habitId).dailySchedule = undefined; _requestFutureScheduleChange(habitId, target, s => ({ ...s, times: s.times.filter(x => x !== time) as readonly TimeOfDay[] }), true); ActionContext.reset(); }, { title: t('modalRemoveTimeTitle'), confirmText: t('deleteButton'), confirmButtonStyle: 'danger', onCancel: () => ActionContext.reset() });

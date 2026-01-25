@@ -71,18 +71,26 @@ async function loadInitialState() {
 
     // 2. SINCRONIZAÇÃO PROATIVA (Background/Decisiva)
     if (hasLocalSyncKey()) {
-        // Trava visual de boot
+        // Trava visual de boot: Bloqueia interações até o sync terminar ou dar timeout
         document.body.classList.add('is-booting');
         
-        fetchStateFromCloud()
-            .then(() => {
-                document.body.classList.remove('is-booting');
-            })
-            .catch(e => {
-                console.warn("Proactive boot sync deferred (offline?):", e);
-                setSyncStatus('syncError');
+        // Timeout de segurança para destravar a UI se a nuvem demorar demais
+        const syncPromise = fetchStateFromCloud();
+        const timeoutPromise = new Promise<void>((resolve) => 
+            setTimeout(() => {
+                if (!state.initialSyncDone) {
+                    console.warn("Boot sync timeout. Unlocking UI.");
+                    state.initialSyncDone = true; // Força desbloqueio lógico
+                    resolve();
+                }
+            }, 5000)
+        );
+
+        Promise.race([syncPromise, timeoutPromise])
+            .finally(() => {
                 document.body.classList.remove('is-booting');
             });
+            
     } else {
         state.initialSyncDone = true;
     }

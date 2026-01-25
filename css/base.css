@@ -37,6 +37,14 @@ body {
     -webkit-text-size-adjust: 100%;
 }
 
+/* --- BOOT LOCK --- */
+/* Bloqueia interações enquanto o sync inicial está pendente para evitar 'false future' */
+body.is-booting {
+    pointer-events: none !important;
+    opacity: 0.8;
+    cursor: wait;
+}
+
 /* --- VIEW TRANSITIONS (SWEET SPOT IMPROVEMENT) --- */
 /* Configura transições nativas suaves entre estados (ex: mudar de dia) */
 ::view-transition-old(root),

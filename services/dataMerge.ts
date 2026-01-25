@@ -46,17 +46,17 @@ function hydrateLogs(appState: AppState) {
 
 /**
  * Mescla o histórico de agendamentos de um hábito usando Last-Write-Wins (LWW) por entrada.
- * Como o vencedor é determinado pelo lastModified global, suas entradas de histórico
- * são consideradas a intenção mais recente para aquela data de início.
+ * O vencedor (determinado pelo lastModified global) tem prioridade sobre as definições de agendamento.
+ * Isso garante que se um usuário alterou um endDate ou meta, a versão mais recente prevaleça.
  */
 function mergeHabitHistories(winnerHistory: HabitSchedule[], loserHistory: HabitSchedule[]): HabitSchedule[] {
     const historyMap = new Map<string, HabitSchedule>();
     
-    // Primeiro preenchemos com o histórico do dispositivo perdedor
+    // 1. Carrega o histórico do perdedor como base
     loserHistory.forEach(s => historyMap.set(s.startDate, { ...s }));
     
-    // O vencedor sobrescreve entradas com a mesma data de início (LWW absoluto)
-    // Se o vencedor encerrou o hábito (endDate definido), isso prevalece.
+    // 2. O vencedor sobrescreve entradas com a mesma data de início (LWW absoluto)
+    // Se o vencedor definiu um endDate, isso será preservado.
     winnerHistory.forEach(s => historyMap.set(s.startDate, { ...s }));
     
     return Array.from(historyMap.values()).sort((a, b) => a.startDate.localeCompare(b.startDate));
@@ -101,7 +101,8 @@ export async function mergeStates(local: AppState, incoming: AppState): Promise<
     const localTs = local.lastModified || 0;
     const incomingTs = incoming.lastModified || 0;
     
-    // PROTEÇÃO CONTRA RESET: Se um lado está vazio e o outro não, o populado vence.
+    // LÓGICA DE VENCEDOR: Maior timestamp vence (LWW).
+    // Proteção: Se um lado está vazio e o outro não, o populado vence para evitar wipe acidental.
     let winner: AppState;
     let loser: AppState;
 
@@ -129,14 +130,14 @@ export async function mergeStates(local: AppState, incoming: AppState): Promise<
             // Mescla histórico com prioridade para o vencedor
             winnerHabit.scheduleHistory = mergeHabitHistories(winnerHabit.scheduleHistory, loserHabit.scheduleHistory);
             
-            // Tombstone de deleção: data mais tardia vence
+            // Tombstone de deleção: data mais tardia vence (ação mais recente)
             if (loserHabit.deletedOn) {
                 if (!winnerHabit.deletedOn || loserHabit.deletedOn > winnerHabit.deletedOn) {
                     winnerHabit.deletedOn = loserHabit.deletedOn;
                 }
             }
 
-            // Graduação: data mais antiga vence (primeira conquista)
+            // Graduação: data mais antiga vence (primeira vez que o usuário conquistou)
             if (loserHabit.graduatedOn) {
                 if (!winnerHabit.graduatedOn || loserHabit.graduatedOn < winnerHabit.graduatedOn) {
                     winnerHabit.graduatedOn = loserHabit.graduatedOn;
@@ -152,10 +153,10 @@ export async function mergeStates(local: AppState, incoming: AppState): Promise<
         else mergeDayRecord(loser.dailyData[date], (merged.dailyData as any)[date]);
     }
 
-    // Merge de bitmasks usando LWW por bloco de 3 bits
+    // BITMASK MERGE: LWW granular por bloco de 3 bits
     merged.monthlyLogs = HabitService.mergeLogs(winner.monthlyLogs, loser.monthlyLogs);
     
-    // O timestamp final deve ser maior que ambos para garantir propagação
+    // O timestamp final deve ser incrementado para garantir propagação
     merged.lastModified = Math.max(localTs, incomingTs, Date.now()) + 1;
 
     return merged;
