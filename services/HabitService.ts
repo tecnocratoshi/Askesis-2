@@ -5,7 +5,7 @@
 
 /**
  * @file services/HabitService.ts
- * @description Motor de Operações Binárias para Logs de Hábitos.
+ * @description Motor de Operações Binárias para Logs de Hábitos (Esquema 9-bit / Tombstone).
  */
 
 import { state, PERIOD_OFFSET, TimeOfDay } from '../state';
@@ -24,7 +24,8 @@ export class HabitService {
     }
 
     /**
-     * Leitura Otimizada (Bitmask Only)
+     * Leitura Otimizada com lógica de Lápide (Tombstone).
+     * Se o bit de lápide (bit 2 do bloco de 3) for 1, o status é forçado para NULL (0).
      */
     static getStatus(habitId: string, dateISO: string, time: TimeOfDay): number {
         const key = this.getLogKey(habitId, dateISO);
@@ -32,14 +33,20 @@ export class HabitService {
         
         if (log !== undefined) {
             const day = parseInt(dateISO.substring(8, 10), 10);
-            const bitPos = BigInt(((day - 1) * 6) + PERIOD_OFFSET[time]);
-            return Number((log >> bitPos) & 3n);
+            const bitPos = BigInt(((day - 1) * 9) + PERIOD_OFFSET[time]);
+            const block = (log >> bitPos) & 7n; // Lê o bloco de 3 bits
+            
+            // Verifica bit de Lápide (Exclusão)
+            if ((block >> 2n) & 1n) return 0; 
+            
+            return Number(block & 3n); // Retorna os 2 bits de status
         }
         return 0;
     }
 
     /**
-     * Escrita Otimizada (Bitmask Only)
+     * Escrita Otimizada. 
+     * Ao definir como NULL (0), ativa o bit de Lápide para propagar a exclusão.
      */
     static setStatus(habitId: string, dateISO: string, time: TimeOfDay, newState: number) {
         if (!state.monthlyLogs) state.monthlyLogs = new Map();
@@ -47,11 +54,22 @@ export class HabitService {
         const key = this.getLogKey(habitId, dateISO);
         const day = parseInt(dateISO.substring(8, 10), 10);
         
-        const bitPos = BigInt(((day - 1) * 6) + PERIOD_OFFSET[time]);
-        const clearMask = ~(3n << bitPos); 
+        const bitPos = BigInt(((day - 1) * 9) + PERIOD_OFFSET[time]);
+        const clearMask = ~(7n << bitPos); // Máscara para limpar 3 bits
         
         let currentLog = state.monthlyLogs.get(key) || 0n;
-        const newLog = (currentLog & clearMask) | (BigInt(newState) << bitPos);
+        
+        let valToStore = 0n;
+        if (newState === 0) {
+            // Caso especial: Exclusão manual (Undo)
+            // Define Tombstone=1 e Status=00 -> Binário 100 -> Decimal 4
+            valToStore = 4n; 
+        } else {
+            // Registro normal: Tombstone=0 e Status=newState
+            valToStore = BigInt(newState);
+        }
+        
+        const newLog = (currentLog & clearMask) | (valToStore << bitPos);
         
         state.monthlyLogs.set(key, newLog);
         state.uiDirtyState.chartData = true;
@@ -59,14 +77,12 @@ export class HabitService {
 
     /**
      * Agrupa logs por mês para criação de shards granulares.
-     * Retorna um mapa onde a chave é o mês (YYYY-MM) e o valor é a lista de logs [habitId_YYYY-MM, hexVal].
      */
     static getLogsGroupedByMonth(): Record<string, [string, string][]> {
         const groups: Record<string, [string, string][]> = {};
         if (!state.monthlyLogs) return groups;
 
         for (const [key, val] of state.monthlyLogs.entries()) {
-            // A chave é habitId_YYYY-MM. O mês está nos últimos 7 caracteres.
             const month = key.split('_').pop() || 'unknown';
             if (!groups[month]) groups[month] = [];
             groups[month].push([key, "0x" + val.toString(16)]);
@@ -75,7 +91,7 @@ export class HabitService {
     }
 
     /**
-     * Serialização legada (Mantida para compatibilidade se necessário)
+     * Serialização para Cloud (Hexadecimal).
      */
     static serializeLogsForCloud(): [string, string][] {
         if (!state.monthlyLogs) return [];
@@ -85,7 +101,7 @@ export class HabitService {
     }
 
     /**
-     * Deserialização (Importação/Cloud)
+     * Deserialização.
      */
     static deserializeLogsFromCloud(serialized: [string, string][]) {
         if (!Array.isArray(serialized)) return;
@@ -100,7 +116,9 @@ export class HabitService {
     }
     
     /**
-     * INTELLIGENT MERGE (CRDT-Lite para Bitmasks)
+     * INTELLIGENT MERGE (CRDT-Lite para Bitmasks).
+     * A operação de OR garante que a Lápide (bit 1) vença o status vazio, 
+     * e o status Done (bit 1) vença o Null original.
      */
     static mergeLogs(winnerMap: Map<string, bigint> | undefined, loserMap: Map<string, bigint> | undefined): Map<string, bigint> {
         const result = new Map<string, bigint>(winnerMap || []);

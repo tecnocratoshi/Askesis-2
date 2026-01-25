@@ -1,4 +1,3 @@
-
 /**
  * @license
  * SPDX-License-Identifier: Apache-2.0
@@ -108,12 +107,9 @@ export interface AppState {
     readonly quoteState?: QuoteDisplayState;
     readonly hasOnboarded: boolean; 
     readonly syncLogs: SyncLog[];
-    monthlyLogs: Map<string, bigint>; // Bitmask Storage (Solução 3)
+    monthlyLogs: Map<string, bigint>; // Bitmask Storage
 }
 
-/**
- * @fix Added HabitTemplate and PredefinedHabit interfaces
- */
 export interface HabitTemplate {
     icon: string;
     color: string;
@@ -133,13 +129,11 @@ export interface PredefinedHabit extends HabitTemplate {
 }
 
 // --- CONSTANTS ---
-export const APP_VERSION = 8; 
+// BUMP V9: Migração para Esquema 9-bit com Tombstones (Lápides)
+export const APP_VERSION = 9; 
 export const STREAK_SEMI_CONSOLIDATED = 21;
 export const STREAK_CONSOLIDATED = 66;
 
-/**
- * @fix Added HABIT_STATE and PERIOD_OFFSET constants
- */
 export const HABIT_STATE = {
     NULL: 0,
     DONE: 1,
@@ -147,15 +141,13 @@ export const HABIT_STATE = {
     DONE_PLUS: 3
 } as const;
 
+// UPDATE [V9]: 3 bits por período (Status: 2, Tombstone: 1)
 export const PERIOD_OFFSET: Record<TimeOfDay, number> = {
     'Morning': 0,
-    'Afternoon': 2,
-    'Evening': 4
+    'Afternoon': 3,
+    'Evening': 6
 };
 
-/**
- * @fix Added FREQUENCIES and STREAK_LOOKBACK_DAYS constants
- */
 export const FREQUENCIES: { labelKey: string, value: Frequency }[] = [
     { labelKey: 'freqDaily', value: { type: 'daily' } },
     { labelKey: 'freqSpecificDaysOfWeek', value: { type: 'specific_days_of_week', days: [] } },
@@ -186,9 +178,6 @@ export const state: {
     habitAppearanceCache: Map<string, Map<string, boolean>>;
     scheduleCache: Map<string, Map<string, HabitSchedule | null>>;
     activeHabitsCache: Map<string, Array<{ habit: Habit; schedule: TimeOfDay[] }>>;
-    /**
-     * @fix Added daySummaryCache
-     */
     daySummaryCache: Map<string, any>;
     selectedDate: string;
     activeLanguageCode: Language['code'];
@@ -202,17 +191,11 @@ export const state: {
     aiReqId: number;
     hasSeenAIResult: boolean;
     lastAIResult: string | null;
-    /**
-     * @fix Added lastAIError
-     */
     lastAIError?: string;
     syncState: 'syncInitial' | 'syncSaving' | 'syncSynced' | 'syncError';
     fullCalendar: { year: number; month: number; };
     uiDirtyState: { calendarVisuals: boolean; habitListStructure: boolean; chartData: boolean; };
     monthlyLogs: Map<string, bigint>;
-    /**
-     * @fix Added editingHabit, confirmAction, confirmEditAction, editingNoteFor, and calendarDates
-     */
     editingHabit?: { isNew: boolean; habitId?: string; originalData?: any; formData: HabitTemplate; targetDate: string };
     confirmAction: (() => void) | null;
     confirmEditAction: (() => void) | null;
@@ -276,9 +259,6 @@ export function clearActiveHabitsCache() {
     state.activeHabitsCache.clear();
 }
 
-/**
- * @fix Added exported members getHabitDailyInfoForDate, ensureHabitDailyInfo, ensureHabitInstanceData, clearScheduleCache, invalidateCachesForDateChange, isDateLoading, isChartDataDirty, invalidateChartCache
- */
 export function getHabitDailyInfoForDate(dateISO: string): Record<string, HabitDailyInfo> {
     if (!state.dailyData[dateISO]) {
         state.dailyData[dateISO] = {};
