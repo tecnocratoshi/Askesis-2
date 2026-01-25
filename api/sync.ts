@@ -9,10 +9,6 @@ export const config = {
   runtime: 'edge',
 };
 
-/**
- * LUA ATOMIC SHARD UPDATE:
- * Corrigido para retornar um formato que o driver do Vercel KV consiga processar como objeto.
- */
 const LUA_SHARDED_UPDATE = `
 local key = KEYS[1]
 local newTs = tonumber(ARGV[1])
@@ -21,12 +17,15 @@ local shardsJson = ARGV[2]
 local currentTs = tonumber(redis.call("HGET", key, "lastModified") or 0)
 
 if newTs < currentTs then
-    -- Retorna o estado atual para merge
     local all = redis.call("HGETALL", key)
     return { "CONFLICT", all }
 end
 
-local shards = cjson.decode(shardsJson)
+local status, shards = pcall(cjson.decode, shardsJson)
+if not status then
+    return { "ERROR", "Invalid JSON in shards" }
+end
+
 for shardName, shardData in pairs(shards) do
     redis.call("HSET", key, shardName, shardData)
 end
@@ -72,7 +71,7 @@ export default async function handler(req: Request) {
         }
 
         if (!keyHash || !/^[a-f0-9]{64}$/i.test(keyHash)) {
-            return new Response(JSON.stringify({ error: 'Unauthorized' }), { status: 401, headers: HEADERS_BASE });
+            return new Response(JSON.stringify({ error: 'Auth Required' }), { status: 401, headers: HEADERS_BASE });
         }
         
         const dataKey = `sync_v3:${keyHash}`;
@@ -87,9 +86,11 @@ export default async function handler(req: Request) {
             const body = await req.json();
             const { lastModified, shards } = body;
 
-            // FIX: lastModified pode ser 0 em contas novas, não deve barrar.
-            if (lastModified === undefined || !shards) {
-                return new Response(JSON.stringify({ error: 'Invalid Payload' }), { status: 400, headers: HEADERS_BASE });
+            if (lastModified === undefined) {
+                return new Response(JSON.stringify({ error: 'Missing lastModified' }), { status: 400, headers: HEADERS_BASE });
+            }
+            if (!shards || typeof shards !== 'object') {
+                return new Response(JSON.stringify({ error: 'Invalid or missing shards' }), { status: 400, headers: HEADERS_BASE });
             }
 
             const result = await kv.eval(LUA_SHARDED_UPDATE, [dataKey], [String(lastModified), JSON.stringify(shards)]) as [string, any?];
@@ -97,8 +98,6 @@ export default async function handler(req: Request) {
             if (result[0] === 'OK') return new Response('{"success":true}', { status: 200, headers: HEADERS_BASE });
             
             if (result[0] === 'CONFLICT') {
-                // Redis HGETALL retorna [k1, v1, k2, v2...]. 
-                // Convertemos para objeto antes de enviar para o cliente simplificar o processamento.
                 const rawList = result[1] as string[];
                 const conflictShards: Record<string, string> = {};
                 for (let i = 0; i < rawList.length; i += 2) {
@@ -106,12 +105,13 @@ export default async function handler(req: Request) {
                 }
                 return new Response(JSON.stringify(conflictShards), { status: 409, headers: HEADERS_BASE });
             }
-            return new Response(JSON.stringify({ error: result[1] }), { status: 400, headers: HEADERS_BASE });
+            
+            return new Response(JSON.stringify({ error: result[1] || 'Lua Execution Error' }), { status: 400, headers: HEADERS_BASE });
         }
 
         return new Response(null, { status: 405 });
     } catch (error: any) {
         console.error("KV Error:", error);
-        return new Response(JSON.stringify({ error: 'Internal Server Error' }), { status: 500, headers: HEADERS_BASE });
+        return new Response(JSON.stringify({ error: error.message || 'Internal Server Error' }), { status: 500, headers: HEADERS_BASE });
     }
 }

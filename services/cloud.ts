@@ -9,12 +9,12 @@
  */
 
 import { AppState, state, getPersistableState, APP_VERSION } from '../state';
-import { loadState, persistStateLocally } from './persistence';
+import { loadState, persistStateLocally, saveState } from './persistence';
 import { generateUUID } from '../utils';
 import { ui } from '../render/ui';
 import { t } from '../i18n';
 import { hasLocalSyncKey, getSyncKey, apiFetch } from './api';
-import { renderApp } from '../render';
+import { renderApp, clearHabitDomCache } from '../render';
 import { mergeStates } from './dataMerge';
 import { HabitService } from './HabitService';
 
@@ -52,8 +52,6 @@ export function runWorkerTask<T>(type: 'encrypt' | 'decrypt' | 'build-ai-prompt'
 
 function splitIntoShards(appState: AppState): Record<string, any> {
     const shards: Record<string, any> = {};
-    
-    // 1. Shard Core: Dados dinâmicos
     shards['core'] = {
         habits: appState.habits,
         dailyData: appState.dailyData,
@@ -62,18 +60,9 @@ function splitIntoShards(appState: AppState): Record<string, any> {
         hasOnboarded: appState.hasOnboarded,
         quoteState: appState.quoteState
     };
-
-    // 2. Shards de Logs: Um por Mês (logs:2024-05)
     const groupedLogs = HabitService.getLogsGroupedByMonth();
-    for (const month in groupedLogs) {
-        shards[`logs:${month}`] = groupedLogs[month];
-    }
-
-    // 3. Shards Archives: Um por Ano
-    for (const year in appState.archives) {
-        shards[`archive:${year}`] = appState.archives[year];
-    }
-
+    for (const month in groupedLogs) { shards[`logs:${month}`] = groupedLogs[month]; }
+    for (const year in appState.archives) { shards[`archive:${year}`] = appState.archives[year]; }
     return shards;
 }
 
@@ -83,29 +72,15 @@ export function clearSyncHashCache() {
 }
 
 function murmurHash3(key: string, seed: number = APP_VERSION): string {
-    let remainder = key.length & 3;
-    let bytes = key.length - remainder;
-    let h1 = seed;
-    let c1 = 0xcc9e2d51;
-    let c2 = 0x1b873593;
-    let i = 0;
-
+    let remainder = key.length & 3, bytes = key.length - remainder, h1 = seed, c1 = 0xcc9e2d51, c2 = 0x1b873593, i = 0;
     while (i < bytes) {
-        let k1 = ((key.charCodeAt(i) & 0xff)) |
-            ((key.charCodeAt(++i) & 0xff) << 8) |
-            ((key.charCodeAt(++i) & 0xff) << 16) |
-            ((key.charCodeAt(++i) & 0xff) << 24);
+        let k1 = ((key.charCodeAt(i) & 0xff)) | ((key.charCodeAt(++i) & 0xff) << 8) | ((key.charCodeAt(++i) & 0xff) << 16) | ((key.charCodeAt(++i) & 0xff) << 24);
         ++i;
-
         k1 = ((((k1 & 0xffff) * c1) + ((((k1 >>> 16) * c1) & 0xffff) << 16))) & 0xffffffff;
         k1 = (k1 << 15) | (k1 >>> 17);
         k1 = ((((k1 & 0xffff) * c2) + ((((k1 >>> 16) * c2) & 0xffff) << 16))) & 0xffffffff;
-
-        h1 ^= k1;
-        h1 = (h1 << 13) | (h1 >>> 19);
-        h1 = (((h1 * 5) + 0xe6546b64)) & 0xffffffff;
+        h1 ^= k1; h1 = (h1 << 13) | (h1 >>> 19); h1 = (((h1 * 5) + 0xe6546b64)) & 0xffffffff;
     }
-
     let k2 = 0;
     switch (remainder) {
         case 3: k2 ^= (key.charCodeAt(i + 2) & 0xff) << 16;
@@ -116,14 +91,10 @@ function murmurHash3(key: string, seed: number = APP_VERSION): string {
             k2 = (((k2 & 0xffff) * c2) + ((((k2 >>> 16) * c2) & 0xffff) << 16)) & 0xffffffff;
             h1 ^= k2;
     }
-
-    h1 ^= key.length;
-    h1 ^= h1 >>> 16;
+    h1 ^= key.length; h1 ^= h1 >>> 16;
     h1 = (((h1 & 0xffff) * 0x85ebca6b) + ((((h1 >>> 16) * 0x85ebca6b) & 0xffff) << 16)) & 0xffffffff;
-    h1 ^= h1 >>> 13;
-    h1 = (((h1 & 0xffff) * 0xc2b2ae35) + ((((h1 >>> 16) * 0xc2b2ae35) & 0xffff) << 16)) & 0xffffffff;
+    h1 ^= h1 >>> 13; h1 = (((h1 & 0xffff) * 0xc2b2ae35) + ((((h1 >>> 16) * 0xc2b2ae35) & 0xffff) << 16)) & 0xffffffff;
     h1 ^= h1 >>> 16;
-
     return (h1 >>> 0).toString(16);
 }
 
@@ -131,6 +102,8 @@ export function addSyncLog(msg: string, type: 'success' | 'error' | 'info' = 'in
     if (!state.syncLogs) state.syncLogs = [];
     state.syncLogs.push({ time: Date.now(), msg, type, icon });
     if (state.syncLogs.length > 50) state.syncLogs.shift();
+    // Persiste os logs imediatamente para que fiquem disponíveis mesmo se o sync falhar e o usuário abrir o modal
+    saveState(true, true);
     console.debug(`[Sync Log] ${msg}`);
 }
 
@@ -144,12 +117,15 @@ async function resolveConflictWithServerState(serverShards: Record<string, strin
     if (!syncKey) return setSyncStatus('syncError');
     
     try {
-        addSyncLog("Conflito detectado. Iniciando Smart Merge...", "info", "🔄");
+        addSyncLog("Conflito de versão. Mesclando dados remotos...", "info", "🔄");
         const remoteShards: Record<string, any> = {};
         for (const key in serverShards) {
-            // FIX: lastModified é metadado plano, não deve ser passado para o decriptador.
             if (key === 'lastModified') continue;
-            remoteShards[key] = await runWorkerTask<any>('decrypt', serverShards[key], syncKey);
+            try {
+                remoteShards[key] = await runWorkerTask<any>('decrypt', serverShards[key], syncKey);
+            } catch (err) {
+                console.warn(`[Sync] Failed to decrypt shard ${key}, skipping.`, err);
+            }
         }
 
         const remoteState: any = {
@@ -163,12 +139,8 @@ async function resolveConflictWithServerState(serverShards: Record<string, strin
         };
 
         for (const key in remoteShards) {
-            if (key.startsWith('archive:')) {
-                remoteState.archives[key.replace('archive:', '')] = remoteShards[key];
-            }
-            if (key.startsWith('logs:')) {
-                remoteShards[key].forEach(([k, v]: [string, string]) => remoteState.monthlyLogs.set(k, BigInt(v)));
-            }
+            if (key.startsWith('archive:')) { remoteState.archives[key.replace('archive:', '')] = remoteShards[key]; }
+            if (key.startsWith('logs:')) { remoteShards[key].forEach(([k, v]: [string, string]) => remoteState.monthlyLogs.set(k, BigInt(v))); }
         }
 
         const localState = getPersistableState();
@@ -179,11 +151,11 @@ async function resolveConflictWithServerState(serverShards: Record<string, strin
         renderApp();
         
         setSyncStatus('syncSynced'); 
-        addSyncLog("Dados mesclados com sucesso.", "success", "✨");
+        addSyncLog("Mesclagem concluída.", "success", "✨");
         lastSyncedHashes.clear();
         syncStateWithCloud(mergedState, true);
     } catch (error: any) {
-        addSyncLog(`Falha na resolução: ${error.message}`, "error", "❌");
+        addSyncLog(`Erro na resolução: ${error.message}`, "error", "❌");
         setSyncStatus('syncError');
     }
 }
@@ -202,10 +174,8 @@ async function performSync() {
         let changeCount = 0;
 
         for (const shardName in rawShards) {
-            // Estabilização do JSON para o Hash
             const currentHash = murmurHash3(JSON.stringify(rawShards[shardName]));
             const lastHash = lastSyncedHashes.get(shardName);
-
             if (currentHash !== lastHash) {
                 dirtyShards[shardName] = await runWorkerTask<string>('encrypt', rawShards[shardName], syncKey);
                 lastSyncedHashes.set(shardName, currentHash);
@@ -219,26 +189,24 @@ async function performSync() {
             return;
         }
 
-        addSyncLog(`Enviando ${changeCount} shards para nuvem...`, "info", "📤");
-        
+        addSyncLog(`Sincronizando ${changeCount} pacotes...`, "info", "📤");
         const safeTs = appState.lastModified || Date.now();
         const payload = { lastModified: safeTs, shards: dirtyShards };
-        
         const response = await apiFetch('/api/sync', { method: 'POST', body: JSON.stringify(payload) }, true);
 
         if (response.status === 409) {
             lastSyncedHashes.clear();
             await resolveConflictWithServerState(await response.json());
-        } else if (response.ok || response.status === 304) {
-            addSyncLog("Sincronização concluída.", "success", "✅");
+        } else if (response.ok) {
+            addSyncLog("Nuvem atualizada.", "success", "✅");
             setSyncStatus('syncSynced');
             document.dispatchEvent(new CustomEvent('habitsChanged')); 
         } else {
             const errorData = await response.json().catch(() => ({}));
-            throw new Error(errorData.error || `Status ${response.status}`);
+            throw new Error(errorData.error || `Erro ${response.status}`);
         }
     } catch (error: any) {
-        addSyncLog(`Erro: Sync error: ${error.message}`, "error", "⚠️");
+        addSyncLog(`Falha no envio: ${error.message}`, "error", "⚠️");
         setSyncStatus('syncError');
     } finally {
         isSyncInProgress = false;
@@ -259,16 +227,17 @@ export function syncStateWithCloud(appState: AppState, immediate = false) {
 async function reconstructStateFromShards(shards: Record<string, string>): Promise<AppState | undefined> {
     const syncKey = getSyncKey();
     if (!syncKey) return undefined;
-
     try {
         const decryptedShards: Record<string, any> = {};
         for (const key in shards) {
-            // FIX: Pula lastModified na decriptação aqui também
             if (key === 'lastModified') continue;
-            decryptedShards[key] = await runWorkerTask<any>('decrypt', shards[key], syncKey);
-            lastSyncedHashes.set(key, murmurHash3(JSON.stringify(decryptedShards[key])));
+            try {
+                decryptedShards[key] = await runWorkerTask<any>('decrypt', shards[key], syncKey);
+                lastSyncedHashes.set(key, murmurHash3(JSON.stringify(decryptedShards[key])));
+            } catch (e) {
+                console.warn(`[Sync] Skip decrypt ${key}`, e);
+            }
         }
-
         const result: any = {
             lastModified: parseInt(shards.lastModified || '0', 10),
             habits: decryptedShards['core']?.habits || [],
@@ -279,16 +248,10 @@ async function reconstructStateFromShards(shards: Record<string, string>): Promi
             hasOnboarded: decryptedShards['core']?.hasOnboarded ?? true,
             quoteState: decryptedShards['core']?.quoteState
         };
-
         for (const key in decryptedShards) {
-            if (key.startsWith('archive:')) {
-                result.archives[key.replace('archive:', '')] = decryptedShards[key];
-            }
-            if (key.startsWith('logs:')) {
-                decryptedShards[key].forEach(([k, v]: [string, string]) => result.monthlyLogs.set(k, BigInt(v)));
-            }
+            if (key.startsWith('archive:')) { result.archives[key.replace('archive:', '')] = decryptedShards[key]; }
+            if (key.startsWith('logs:')) { decryptedShards[key].forEach(([k, v]: [string, string]) => result.monthlyLogs.set(k, BigInt(v))); }
         }
-
         return result;
     } catch (e) {
         console.error("State reconstruction failed:", e);
@@ -297,19 +260,13 @@ async function reconstructStateFromShards(shards: Record<string, string>): Promi
 }
 
 export async function downloadRemoteState(): Promise<AppState | undefined> {
-    addSyncLog("Buscando dados na nuvem...", "info", "🔍");
+    addSyncLog("Baixando dados remotos...", "info", "🔍");
     const response = await apiFetch('/api/sync', {}, true);
-    if (response.status === 304) {
-        addSyncLog("Nuvens em repouso (304).", "info", "💤");
-        return undefined;
-    }
-    if (!response.ok) throw new Error("Cloud fetch failed");
+    if (response.status === 304) { addSyncLog("Sem novidades na nuvem.", "info", "💤"); return undefined; }
+    if (!response.ok) throw new Error("Falha na conexão com a nuvem");
     const shards = await response.json();
-    if (!shards) {
-        addSyncLog("Nenhum dado encontrado na nuvem.", "info", "🌫️");
-        return undefined;
-    }
-    addSyncLog("Dados remotos baixados com sucesso.", "success", "📥");
+    if (!shards || Object.keys(shards).length === 0) { addSyncLog("Cofre vazio na nuvem.", "info", "🌫️"); return undefined; }
+    addSyncLog("Dados baixados com sucesso.", "success", "📥");
     return await reconstructStateFromShards(shards);
 }
 
@@ -319,28 +276,22 @@ export async function fetchStateFromCloud(): Promise<AppState | undefined> {
         const response = await apiFetch('/api/sync', {}, true);
         if (response.status === 304) { setSyncStatus('syncSynced'); return undefined; }
         if (!response.ok) throw new Error("Cloud fetch failed");
-        
         const shards = await response.json();
         if (!shards) return undefined;
-
         const remoteState = await reconstructStateFromShards(shards);
         if (!remoteState) return undefined;
-
         const localState = getPersistableState();
-        const remoteModified = remoteState.lastModified || 0;
-        const localModified = localState.lastModified || 0;
-
+        const remoteModified = remoteState.lastModified || 0, localModified = localState.lastModified || 0;
         if (remoteModified > localModified) {
-            addSyncLog("Sincronizando atualização remota...", "info", "☁️");
+            addSyncLog("Atualização remota detectada.", "info", "☁️");
             const mergedState = await mergeStates(localState, remoteState);
             await persistStateLocally(mergedState, true);
             await loadState(mergedState);
             renderApp();
         } else if (localModified > remoteModified) {
-            addSyncLog("Local é mais recente. Forçando upload.", "info", "🚀");
+            addSyncLog("Sincronizando mudanças locais...", "info", "🚀");
             syncStateWithCloud(localState, true);
         }
-
         setSyncStatus('syncSynced');
         return remoteState;
     } catch (error) {
