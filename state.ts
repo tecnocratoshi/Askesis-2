@@ -167,6 +167,7 @@ export type Language = typeof LANGUAGES[number];
 
 // --- APPLICATION STATE ---
 export const state: {
+    version: number;
     habits: Habit[];
     lastModified: number;
     dailyData: Record<string, Record<string, HabitDailyInfo>>;
@@ -202,6 +203,7 @@ export const state: {
     editingNoteFor: { habitId: string; date: string; time: TimeOfDay } | null;
     calendarDates: string[];
 } = {
+    version: APP_VERSION,
     habits: [],
     lastModified: 0,
     dailyData: {},
@@ -294,8 +296,55 @@ export function invalidateCachesForDateChange(dateISO: string, habitIds: string[
     state.scheduleCache.forEach((cache) => cache.delete(dateISO));
 }
 
-export function isDateLoading(dateISO: string): boolean {
-    return false;
+/**
+ * Limpa entradas antigas do habitAppearanceCache (mais de 90 dias).
+ * Implementa rolling window cache para evitar memory leak.
+ */
+export function pruneHabitAppearanceCache(): void {
+    try {
+        const today = parseUTCIsoDate(getTodayUTCIso());
+        const ninetyDaysAgo = new Date(today);
+        ninetyDaysAgo.setUTCDate(ninetyDaysAgo.getUTCDate() - 90);
+        const cutoffDate = toUTCIsoDateString(ninetyDaysAgo);
+        
+        state.habitAppearanceCache.forEach((dateMap, habitId) => {
+            dateMap.forEach((_, dateISO) => {
+                if (dateISO < cutoffDate) {
+                    dateMap.delete(dateISO);
+                }
+            });
+            if (dateMap.size === 0) {
+                state.habitAppearanceCache.delete(habitId);
+            }
+        });
+    } catch (error) {
+        console.warn('[Cache] Error pruning habitAppearanceCache:', error);
+    }
+}
+
+/**
+ * Limpa entradas antigas do streaksCache (mais de 1 ano).
+ */
+export function pruneStreaksCache(): void {
+    try {
+        const today = new Date(parseUTCIsoDate(getTodayUTCIso()));
+        const oneYearAgo = new Date(today);
+        oneYearAgo.setUTCFullYear(oneYearAgo.getUTCFullYear() - 1);
+        const cutoffDate = toUTCIsoDateString(oneYearAgo);
+        
+        state.streaksCache.forEach((dateMap, habitId) => {
+            dateMap.forEach((_, dateISO) => {
+                if (dateISO < cutoffDate) {
+                    dateMap.delete(dateISO);
+                }
+            });
+            if (dateMap.size === 0) {
+                state.streaksCache.delete(habitId);
+            }
+        });
+    } catch (error) {
+        console.warn('[Cache] Error pruning streaksCache:', error);
+    }
 }
 
 export function isChartDataDirty(): boolean {

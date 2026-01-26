@@ -1,0 +1,9 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "types": ["@playwright/test"],
+    "jsx": "react-jsx"
+  },
+  "include": ["tests/**/*.spec.ts"],
+  "exclude": ["node_modules", "dist", "build"]
+}

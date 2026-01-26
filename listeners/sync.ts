@@ -13,6 +13,8 @@ import { storeKey, clearKey, hasLocalSyncKey, getSyncKey, isValidKeyFormat } fro
 import { generateUUID } from "../utils";
 import { getPersistableState, state, clearActiveHabitsCache } from "../state";
 import { mergeStates } from "../services/dataMerge";
+import { logger } from "../services/logger";
+import { setSyncStatus as setHealthSyncStatus } from "../api/health";
 
 function showView(view: 'inactive' | 'enterKey' | 'displayKey' | 'active') {
     ui.syncInactiveView.style.display = 'none';
@@ -45,6 +47,9 @@ async function _processKey(key: string) {
     const originalKey = getSyncKey();
     
     try {
+        logger.info('Starting sync key validation', { module: 'sync' });
+        setHealthSyncStatus('in-progress');
+        
         clearSyncHashCache();
         storeKey(key);
         
@@ -53,6 +58,7 @@ async function _processKey(key: string) {
         // SEGURANÇA: Só carregamos se houver hábitos na nuvem.
         // Se a nuvem estiver vazia, forçamos um PUSH dos dados locais para não perder o progresso atual.
         if (cloudState && cloudState.habits && cloudState.habits.length > 0) {
+            logger.info('Cloud state found, merging states', { module: 'sync', habitCount: cloudState.habits.length });
             addSyncLog("Dados encontrados na nuvem. Mesclando...", "info", "🧬");
             const localState = getPersistableState();
             const mergedState = await mergeStates(localState, cloudState);
@@ -63,14 +69,19 @@ async function _processKey(key: string) {
             await saveState(true);
             renderApp();
             setSyncStatus('syncSynced');
+            setHealthSyncStatus('success');
             syncStateWithCloud(mergedState, true);
         } else {
+            logger.info('Cloud state empty, pushing local state', { module: 'sync' });
             addSyncLog("Cofre nuvem vazio. Inicializando com dados locais.", "info", "⬆️");
             setSyncStatus('syncSynced');
             syncStateWithCloud(getPersistableState(), true);
         }
         _refreshViewState(); 
     } catch (error: any) {
+        logger.error('Sync key validation failed', { module: 'sync' }, error);
+        setHealthSyncStatus('failed', error.message || 'Unknown error');
+        
         if (originalKey) storeKey(originalKey);
         else clearKey();
         if (ui.syncErrorMsg) {

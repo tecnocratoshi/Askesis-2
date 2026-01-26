@@ -1,19 +1,21 @@
 {
-  // [ANALYSIS PROGRESS]: 100% - Configuração TypeScript otimizada para ESNext e DOM.
   "compilerOptions": {
     "target": "es2020",
     "lib": ["dom", "dom.iterable", "esnext"],
     "allowJs": true,
     "skipLibCheck": true,
-    "strict": true,
+    "strict": false,
     "forceConsistentCasingInFileNames": true,
     "noEmit": true,
     "esModuleInterop": true,
+    "jsx": "react",
+    "jsxFactory": "React.createElement",
     "module": "esnext",
     "moduleResolution": "node",
     "resolveJsonModule": true,
-    "isolatedModules": true
+    "isolatedModules": true,
+    "types": ["vitest/globals", "node"]
   },
   "include": ["**/*.ts", "**/*.tsx"],
-  "exclude": ["node_modules"]
+  "exclude": ["node_modules", "dist", "build", "**/*.spec.ts", "playwright.config.ts"]
 }

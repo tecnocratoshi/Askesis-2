@@ -13,7 +13,8 @@ import {
     ensureHabitInstanceData, clearScheduleCache,
     clearActiveHabitsCache, invalidateCachesForDateChange, getPersistableState,
     HabitDayData, STREAK_SEMI_CONSOLIDATED, STREAK_CONSOLIDATED,
-    getHabitDailyInfoForDate, AppState, HABIT_STATE
+    getHabitDailyInfoForDate, AppState, HABIT_STATE,
+    pruneHabitAppearanceCache, pruneStreaksCache
 } from '../state';
 import { saveState, loadState, clearLocalPersistence } from './persistence';
 import { PREDEFINED_HABITS } from '../data/predefinedHabits';
@@ -186,6 +187,16 @@ const _applyHabitDeletion = async () => {
     // Para Hard Delete, definimos a data de deleção para o início da existência do hábito (ou antes),
     // garantindo que ele não apareça em nenhum filtro de data (shouldHabitAppearOnDate).
     habit.deletedOn = habit.createdOn;
+    
+    // ✅ Limpar streaksCache para este hábito deletado
+    if (state.streaksCache.has(habit.id)) {
+        state.streaksCache.delete(habit.id);
+    }
+    
+    // ✅ Limpar habitAppearanceCache para este hábito deletado
+    if (state.habitAppearanceCache.has(habit.id)) {
+        state.habitAppearanceCache.delete(habit.id);
+    }
     
     // 2. Limpeza Profunda de Logs (Bitmasks)
     HabitService.pruneLogsForHabit(habit.id);
@@ -419,7 +430,19 @@ export function exportData() {
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a'); a.href = url; a.download = `askesis-backup-${getTodayUTCIso()}.json`; a.click(); URL.revokeObjectURL(url);
 }
-export function handleDayTransition() { const today = getTodayUTCIso(); clearActiveHabitsCache(); state.uiDirtyState.calendarVisuals = state.uiDirtyState.habitListStructure = state.uiDirtyState.chartData = true; state.calendarDates = []; if (state.selectedDate !== today) state.selectedDate = today; document.dispatchEvent(new CustomEvent('render-app')); }
+export function handleDayTransition() { 
+    const today = getTodayUTCIso(); 
+    clearActiveHabitsCache(); 
+    
+    // ✅ Limpar caches antigos para evitar memory leaks
+    pruneHabitAppearanceCache();
+    pruneStreaksCache();
+    
+    state.uiDirtyState.calendarVisuals = state.uiDirtyState.habitListStructure = state.uiDirtyState.chartData = true; 
+    state.calendarDates = []; 
+    if (state.selectedDate !== today) state.selectedDate = today; 
+    document.dispatchEvent(new CustomEvent('render-app')); 
+}
 
 function _processAndFormatCelebrations(pendingIds: string[], translationKey: 'aiCelebration21Day' | 'aiCelebration66Day', streakMilestone: number): string {
     if (pendingIds.length === 0) return '';
