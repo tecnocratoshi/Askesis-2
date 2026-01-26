@@ -22,6 +22,129 @@ import { HabitService } from './HabitService';
 let syncTimeout: number | null = null;
 const DEBOUNCE_DELAY = 2000; 
 const HASH_STORAGE_KEY = 'askesis_sync_hashes';
+const TELEMETRY_STORAGE_KEY = 'askesis_sync_telemetry';
+
+// ===== RETRY & TELEMETRY SYSTEM =====
+interface SyncRetryConfig {
+    maxAttempts: number;
+    initialDelayMs: number;
+    maxDelayMs: number;
+    backoffFactor: number;
+}
+
+interface SyncTelemetry {
+    totalSyncs: number;
+    successfulSyncs: number;
+    failedSyncs: number;
+    totalPayloadBytes: number;
+    maxPayloadBytes: number;
+    avgPayloadBytes: number;
+    errorFrequency: Record<string, number>;
+    lastError: { message: string; timestamp: number; } | null;
+}
+
+const RETRY_CONFIG: SyncRetryConfig = {
+    maxAttempts: 5,
+    initialDelayMs: 1000,      // 1 segundo
+    maxDelayMs: 32000,         // 32 segundos
+    backoffFactor: 2           // Dobra a cada tentativa
+};
+
+let syncRetryAttempt = 0;
+let syncTelemetry: SyncTelemetry = loadTelemetry();
+
+function loadTelemetry(): SyncTelemetry {
+    try {
+        const raw = localStorage.getItem(TELEMETRY_STORAGE_KEY);
+        if (raw) {
+            const data = JSON.parse(raw) as SyncTelemetry;
+            // Resetar contadores diários se necessário
+            if (new Date().toDateString() !== sessionStorage.getItem('teleDay')) {
+                data.failedSyncs = 0;
+                data.errorFrequency = {};
+                sessionStorage.setItem('teleDay', new Date().toDateString());
+            }
+            return data;
+        }
+    } catch (e) {
+        console.warn("[Telemetry] Falha ao carregar dados", e);
+    }
+    return {
+        totalSyncs: 0,
+        successfulSyncs: 0,
+        failedSyncs: 0,
+        totalPayloadBytes: 0,
+        maxPayloadBytes: 0,
+        avgPayloadBytes: 0,
+        errorFrequency: {},
+        lastError: null
+    };
+}
+
+function saveTelemetry() {
+    try {
+        localStorage.setItem(TELEMETRY_STORAGE_KEY, JSON.stringify(syncTelemetry));
+    } catch (e) {
+        console.warn("[Telemetry] Falha ao salvar dados", e);
+    }
+}
+
+function recordSyncAttempt(payloadSize: number, success: boolean, error?: string) {
+    syncTelemetry.totalSyncs++;
+    
+    if (success) {
+        syncTelemetry.successfulSyncs++;
+        syncRetryAttempt = 0; // Reset retry counter
+    } else {
+        syncTelemetry.failedSyncs++;
+        if (error) {
+            const errorType = error.split(':')[0] || 'UNKNOWN_ERROR';
+            syncTelemetry.errorFrequency[errorType] = (syncTelemetry.errorFrequency[errorType] || 0) + 1;
+            syncTelemetry.lastError = { message: error, timestamp: Date.now() };
+        }
+    }
+    
+    // Atualizar estatísticas de payload
+    syncTelemetry.totalPayloadBytes += payloadSize;
+    if (payloadSize > syncTelemetry.maxPayloadBytes) {
+        syncTelemetry.maxPayloadBytes = payloadSize;
+    }
+    syncTelemetry.avgPayloadBytes = Math.round(
+        syncTelemetry.totalPayloadBytes / Math.max(1, syncTelemetry.totalSyncs)
+    );
+    
+    saveTelemetry();
+    
+    // Log para debugging
+    console.debug('[Sync Telemetry]', {
+        sync: `${syncTelemetry.successfulSyncs}/${syncTelemetry.totalSyncs}`,
+        payload: `${payloadSize} bytes`,
+        error: error || 'none'
+    });
+}
+
+function calculateRetryDelay(attemptNumber: number): number {
+    const exponentialDelay = RETRY_CONFIG.initialDelayMs * 
+        Math.pow(RETRY_CONFIG.backoffFactor, attemptNumber);
+    const delayWithJitter = exponentialDelay * (0.5 + Math.random() * 0.5); // ±50% jitter
+    return Math.min(delayWithJitter, RETRY_CONFIG.maxDelayMs);
+}
+
+function getSyncHealthStatus() {
+    const successRate = syncTelemetry.totalSyncs > 0 
+        ? (syncTelemetry.successfulSyncs / syncTelemetry.totalSyncs * 100).toFixed(1)
+        : 'N/A';
+    return {
+        successRate: `${successRate}%`,
+        totalAttempts: syncTelemetry.totalSyncs,
+        lastError: syncTelemetry.lastError,
+        avgPayloadSize: `${syncTelemetry.avgPayloadBytes} bytes`,
+        topErrors: Object.entries(syncTelemetry.errorFrequency)
+            .sort(([, a], [, b]) => b - a)
+            .slice(0, 3)
+            .map(([err, count]) => `${err}(${count})`)
+    };
+}
 
 let isSyncInProgress = false;
 let pendingSyncState: AppState | null = null;
@@ -277,11 +400,13 @@ async function performSync() {
         if (response.status === 409) {
             clearSyncHashCache();
             await resolveConflictWithServerState(await response.json());
+            recordSyncAttempt(payloadStr.length, true);
         } else if (response.ok) {
             addSyncLog("Nuvem atualizada.", "success", "✅");
             setSyncStatus('syncSynced');
             pendingHashUpdates.forEach((hash, shard) => lastSyncedHashes.set(shard, hash));
             persistHashCache();
+            recordSyncAttempt(payloadStr.length, true);
             document.dispatchEvent(new CustomEvent('habitsChanged')); 
         } else {
             let errorData: any = {};
@@ -296,16 +421,58 @@ async function performSync() {
         }
     } catch (error: any) {
         const errorMsg = error.message || String(error);
-        addSyncLog(`Falha no envio: ${errorMsg}`, "error", "⚠️");
-        console.error("[Sync] Error details:", { 
+        recordSyncAttempt(0, false, errorMsg);
+        
+        // ===== RETRY LOGIC =====
+        if (syncRetryAttempt < RETRY_CONFIG.maxAttempts) {
+            const nextDelay = calculateRetryDelay(syncRetryAttempt);
+            syncRetryAttempt++;
+            
+            addSyncLog(
+                `Falha no envio: ${errorMsg}. Tentativa ${syncRetryAttempt}/${RETRY_CONFIG.maxAttempts} em ${(nextDelay/1000).toFixed(1)}s...`,
+                "error",
+                "🔄"
+            );
+            
+            console.warn("[Sync] Retry scheduled:", {
+                attempt: syncRetryAttempt,
+                delayMs: nextDelay,
+                error: errorMsg
+            });
+            
+            isSyncInProgress = false;
+            syncTimeout = window.setTimeout(() => {
+                syncTimeout = null;
+                pendingSyncState = appState; // Re-enqueue para retry
+                performSync();
+            }, nextDelay);
+            
+            return; // Não marcar como erro fatal ainda
+        }
+        
+        // ===== FINAL ERROR (todas as tentativas falharam) =====
+        addSyncLog(
+            `Falha após ${RETRY_CONFIG.maxAttempts} tentativas: ${errorMsg}`,
+            "error",
+            "⚠️"
+        );
+        
+        console.error("[Sync] Final error after all retries:", { 
             message: errorMsg, 
             stack: error.stack,
-            timestamp: new Date().toISOString()
+            timestamp: new Date().toISOString(),
+            retries: syncRetryAttempt
         });
+        
         setSyncStatus('syncError');
     } finally {
         isSyncInProgress = false;
-        if (pendingSyncState) setTimeout(performSync, 500);
+        if (pendingSyncState) {
+            // Se há mudanças pendentes e não estamos em retry, agendar próxima sincronização
+            if (!syncTimeout) {
+                setTimeout(performSync, 500);
+            }
+        }
     }
 }
 
@@ -418,4 +585,49 @@ export async function fetchStateFromCloud(): Promise<AppState | undefined> {
     } finally {
         state.initialSyncDone = true;
     }
+}
+
+// ===== TELEMETRY & MONITORING EXPORTS =====
+
+/**
+ * Retorna o status de saúde da sincronização
+ * @returns {object} Objeto com métricas de sincronização
+ */
+export function getSyncStatus() {
+    return getSyncHealthStatus();
+}
+
+/**
+ * Retorna telemetria completa de sincronização
+ * @returns {SyncTelemetry} Dados detalhados de sincronização
+ */
+export function getSyncTelemetry(): SyncTelemetry {
+    return { ...syncTelemetry };
+}
+
+/**
+ * Retorna número de tentativas de retry em andamento
+ * @returns {number} Tentativa atual (0 se sucesso)
+ */
+export function getSyncRetryCount(): number {
+    return syncRetryAttempt;
+}
+
+/**
+ * Reseta telemetria e contadores de retry
+ */
+export function resetSyncTelemetry() {
+    syncTelemetry = {
+        totalSyncs: 0,
+        successfulSyncs: 0,
+        failedSyncs: 0,
+        totalPayloadBytes: 0,
+        maxPayloadBytes: 0,
+        avgPayloadBytes: 0,
+        errorFrequency: {},
+        lastError: null
+    };
+    syncRetryAttempt = 0;
+    saveTelemetry();
+    console.info("[Telemetry] Resetado com sucesso");
 }
