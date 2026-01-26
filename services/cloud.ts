@@ -237,6 +237,9 @@ async function performSync() {
             
             if (currentHash !== lastHash) {
                 const encrypted = await runWorkerTask<string>('encrypt', rawShards[shardName], syncKey);
+                if (!encrypted || typeof encrypted !== 'string') {
+                    throw new Error(`Encryption failed for shard ${shardName}: invalid result`);
+                }
                 encryptedShards[shardName] = encrypted;
                 pendingHashUpdates.set(shardName, currentHash);
                 changeCount++;
@@ -253,9 +256,22 @@ async function performSync() {
         const safeTs = appState.lastModified || Date.now();
         
         const payload = { lastModified: safeTs, shards: encryptedShards };
+        
+        // Validate payload before sending
+        let payloadStr: string;
+        try {
+            payloadStr = JSON.stringify(payload);
+        } catch (jsonErr: any) {
+            throw new Error(`Failed to serialize payload: ${jsonErr.message}`);
+        }
+        
+        if (payloadStr.length > 10 * 1024 * 1024) {
+            throw new Error(`Payload too large: ${(payloadStr.length / 1024 / 1024).toFixed(2)}MB`);
+        }
+        
         const response = await apiFetch('/api/sync', { 
             method: 'POST', 
-            body: JSON.stringify(payload) 
+            body: payloadStr
         }, true);
 
         if (response.status === 409) {
@@ -268,11 +284,24 @@ async function performSync() {
             persistHashCache();
             document.dispatchEvent(new CustomEvent('habitsChanged')); 
         } else {
-            const errorData = await response.json().catch(() => ({}));
-            throw new Error(errorData.error || `Erro ${response.status}`);
+            let errorData: any = {};
+            try {
+                errorData = await response.json();
+            } catch (e) {
+                console.error("Failed to parse error response:", e);
+                errorData = { error: `HTTP ${response.status}` };
+            }
+            const errorMsg = errorData.error || `Erro ${response.status}`;
+            throw new Error(errorMsg);
         }
     } catch (error: any) {
-        addSyncLog(`Falha no envio: ${error.message}`, "error", "⚠️");
+        const errorMsg = error.message || String(error);
+        addSyncLog(`Falha no envio: ${errorMsg}`, "error", "⚠️");
+        console.error("[Sync] Error details:", { 
+            message: errorMsg, 
+            stack: error.stack,
+            timestamp: new Date().toISOString()
+        });
         setSyncStatus('syncError');
     } finally {
         isSyncInProgress = false;

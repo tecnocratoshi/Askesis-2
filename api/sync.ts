@@ -22,10 +22,28 @@ if newTs < currentTs then
     return { "CONFLICT", all }
 end
 
--- Robust JSON Parsing
+-- Robust JSON Parsing with detailed error info
 local status, shards = pcall(cjson.decode, shardsJson)
 if not status then
-    return { "ERROR", "Invalid JSON in shards" }
+    -- Return more detailed error message including what went wrong
+    return { "ERROR", "JSON_PARSE_ERROR:" .. tostring(shards) }
+end
+
+-- Validate shards is a table
+if type(shards) ~= "table" then
+    return { "ERROR", "INVALID_SHARDS_TYPE:" .. type(shards) }
+end
+
+-- Validate shard count for safety
+local shardCount = 0
+for k, v in pairs(shards) do
+    shardCount = shardCount + 1
+    if shardCount > 1000 then
+        return { "ERROR", "TOO_MANY_SHARDS:" .. shardCount }
+    end
+    if type(v) ~= "string" then
+        return { "ERROR", "SHARD_NOT_STRING:" .. tostring(k) }
+    end
 end
 
 -- Atomic Shard Update
@@ -98,7 +116,19 @@ export default async function handler(req: Request) {
                 return new Response(JSON.stringify({ error: 'Invalid or missing shards' }), { status: 400, headers: HEADERS_BASE });
             }
 
-            const result = await kv.eval(LUA_SHARDED_UPDATE, [dataKey], [String(lastModified), JSON.stringify(shards)]) as [string, any?];
+            // Pre-validate shards before sending to Lua
+            const shardsStr = JSON.stringify(shards);
+            if (shardsStr.length > 10 * 1024 * 1024) { // 10MB limit
+                return new Response(JSON.stringify({ error: 'Payload too large' }), { status: 413, headers: HEADERS_BASE });
+            }
+
+            let result: any;
+            try {
+                result = await kv.eval(LUA_SHARDED_UPDATE, [dataKey], [String(lastModified), shardsStr]) as [string, any?];
+            } catch (luaError: any) {
+                console.error("Lua execution error:", luaError);
+                return new Response(JSON.stringify({ error: `Lua execution failed: ${luaError.message}` }), { status: 500, headers: HEADERS_BASE });
+            }
             
             if (result[0] === 'OK') return new Response('{"success":true}', { status: 200, headers: HEADERS_BASE });
             
@@ -111,7 +141,11 @@ export default async function handler(req: Request) {
                 return new Response(JSON.stringify(conflictShards), { status: 409, headers: HEADERS_BASE });
             }
             
-            return new Response(JSON.stringify({ error: result[1] || 'Lua Execution Error' }), { status: 400, headers: HEADERS_BASE });
+            // Improved error messages from Lua execution
+            const errorMsg = result[1] || 'Lua execution error';
+            const detailedError = typeof errorMsg === 'string' ? errorMsg : String(errorMsg);
+            console.error("Lua error details:", detailedError);
+            return new Response(JSON.stringify({ error: detailedError }), { status: 400, headers: HEADERS_BASE });
         }
 
         return new Response(null, { status: 405 });
