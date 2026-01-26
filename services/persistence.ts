@@ -185,6 +185,7 @@ export async function loadState(cloudState?: AppState): Promise<AppState | null>
     let mainState = cloudState;
     let binaryLogsData: any;
 
+    // 1. Load from IDB if no Cloud State provided
     if (!mainState) {
         try {
             const db = await getDB();
@@ -208,31 +209,28 @@ export async function loadState(cloudState?: AppState): Promise<AppState | null>
     }
 
     if (mainState) {
+        // 2. CRITICAL FIX: Pre-Migration Hydration
+        // Se temos logs binários do IDB, precisamos injetá-los no objeto ANTES da migração.
+        // Se a migração rodar num objeto sem logs, ela pode assumir que é um estado novo 
+        // e ignorar a atualização necessária dos bitmasks (ex: v8 -> v9), corrompendo os dados.
+        if (binaryLogsData && !mainState.monthlyLogs) {
+            (mainState as any).monthlyLogs = binaryLogsData;
+        }
+
+        // 3. Migrate State (Handles Schema Upgrades & Bitmask Expansion)
         let migrated = migrateState(mainState, APP_VERSION);
         
-        state.monthlyLogs = new Map();
-        if (binaryLogsData) {
-            if (typeof binaryLogsData === 'object' && !Array.isArray(binaryLogsData)) {
+        // 4. Hydrate Result into Global State
+        state.monthlyLogs = migrated.monthlyLogs;
+        
+        // Fallback robusto: se a migração falhou em hidratar o Map, tenta recuperar dos dados brutos
+        if ((!state.monthlyLogs || state.monthlyLogs.size === 0) && binaryLogsData) {
+             if (typeof binaryLogsData === 'object' && !Array.isArray(binaryLogsData)) {
+                state.monthlyLogs = new Map();
                 Object.entries(binaryLogsData as Record<string, string>).forEach(([k, v]) => {
                     state.monthlyLogs.set(k, BigInt("0x" + v));
                 });
-            } else if (Array.isArray(binaryLogsData)) {
-                binaryLogsData.forEach(([k, v]) => {
-                    const hex = String(v).startsWith('0x') ? String(v) : "0x" + v;
-                    state.monthlyLogs.set(k, BigInt(hex));
-                });
             }
-        }
-        
-        if ((migrated as any).monthlyLogsSerialized) {
-            HabitService.deserializeLogsFromCloud((migrated as any).monthlyLogsSerialized);
-            delete (migrated as any).monthlyLogsSerialized;
-        } else if (migrated.monthlyLogs instanceof Map && migrated.monthlyLogs.size > 0) {
-            // FIX: Sobrescrita seletiva.
-            // Só usamos os logs do objeto migrado (JSON) se eles existirem.
-            // Isso evita que um mapa vazio (criado pelo migrateState quando o JSON não tem logs)
-            // apague os logs binários que acabamos de carregar do 'binaryLogsData'.
-            state.monthlyLogs = migrated.monthlyLogs;
         }
 
         state.habits = [...(migrated.habits || [])];
@@ -246,6 +244,7 @@ export async function loadState(cloudState?: AppState): Promise<AppState | null>
         state.hasOnboarded = migrated.hasOnboarded ?? true;
         state.syncLogs = migrated.syncLogs || [];
 
+        // Clear Caches
         ['streaksCache', 'scheduleCache', 'activeHabitsCache', 'unarchivedCache', 'habitAppearanceCache', 'daySummaryCache'].forEach(k => (state as any)[k].clear());
         
         clearHabitDomCache();

@@ -64,6 +64,7 @@ function splitIntoShards(appState: AppState): Record<string, any> {
     const shards: Record<string, any> = {};
     // Core: Dados leves e críticos para o boot
     shards['core'] = {
+        version: appState.version, // SYNC FIX: Version must be synced to avoid re-migration issues
         habits: appState.habits,
         dailyData: appState.dailyData,
         dailyDiagnoses: appState.dailyDiagnoses,
@@ -164,6 +165,7 @@ async function resolveConflictWithServerState(serverShards: Record<string, strin
         }
 
         const remoteState: any = {
+            version: remoteShards['core']?.version || 0,
             lastModified: parseInt(serverShards.lastModified || '0', 10),
             habits: remoteShards['core']?.habits || [],
             dailyData: remoteShards['core']?.dailyData || {},
@@ -282,6 +284,7 @@ async function reconstructStateFromShards(shards: Record<string, string>): Promi
             }
         }
         const result: any = {
+            version: decryptedShards['core']?.version || 0, // SYNC FIX: Retrieve version to guide migration
             lastModified: parseInt(shards.lastModified || '0', 10),
             habits: decryptedShards['core']?.habits || [],
             dailyData: decryptedShards['core']?.dailyData || {},
