@@ -227,7 +227,10 @@ export async function loadState(cloudState?: AppState): Promise<AppState | null>
         if ((migrated as any).monthlyLogsSerialized) {
             HabitService.deserializeLogsFromCloud((migrated as any).monthlyLogsSerialized);
             delete (migrated as any).monthlyLogsSerialized;
-        } else if (migrated.monthlyLogs instanceof Map && state.monthlyLogs.size === 0) {
+        } else if (migrated.monthlyLogs instanceof Map) {
+            // FIX: Removida a verificação '&& state.monthlyLogs.size === 0' que impedia
+            // a atualização da memória durante operações de merge na nuvem.
+            // Agora, se o estado migrado tem um Map válido, ele é sempre respeitado.
             state.monthlyLogs = migrated.monthlyLogs;
         }
 

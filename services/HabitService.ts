@@ -117,9 +117,11 @@ export class HabitService {
     
     /**
      * INTELLIGENT MERGE (CRDT-Lite para Bitmasks).
-     * Itera bloco por bloco (93 blocos por mês). O vencedor (maior timestamp) tem 
-     * prioridade absoluta no bloco. Se o vencedor for zero (sem dados), usamos o perdedor.
-     * Isso evita que um bitmask vazio do vencedor sobrescreva dados válidos do perdedor em dias que o vencedor não tocou.
+     * Itera bloco por bloco (93 blocos por mês).
+     * Lógica de Resolução de Conflitos:
+     * 1. Se um lado tem Tombstone (4n), ele vence (Delete Wins).
+     * 2. Se ambos têm dados, a União (OR) preserva o bit de maior valor (ex: Done+ > Done).
+     * 3. Se apenas um tem dados, ele vence.
      */
     static mergeLogs(winnerMap: Map<string, bigint> | undefined, loserMap: Map<string, bigint> | undefined): Map<string, bigint> {
         const result = new Map<string, bigint>(winnerMap || []);
@@ -135,13 +137,25 @@ export class HabitService {
                 const winnerBlock = (winnerVal >> shift) & 7n;
                 const loserBlock = (loserVal >> shift) & 7n;
 
-                // Se o vencedor tem um dado (status 1-3 ou tombstone 4), ele ganha.
-                if (winnerBlock !== 0n) {
-                    mergedVal |= (winnerBlock << shift);
+                let finalBlock = 0n;
+
+                // CRDT LOGIC: Tombstone Priority > Data Priority > Empty
+                const winnerTomb = (winnerBlock & 4n) === 4n;
+                const loserTomb = (loserBlock & 4n) === 4n;
+
+                if (winnerTomb || loserTomb) {
+                    // Se qualquer um dos lados diz "Delete", respeitamos a deleção.
+                    finalBlock = 4n; 
+                } else if (winnerBlock !== 0n && loserBlock !== 0n) {
+                    // Conflito de Valores Positivos: União Bitwise para preservar o estado mais "alto"
+                    // Ex: Done (1) | Done+ (3) = Done+ (3)
+                    finalBlock = winnerBlock | loserBlock;
                 } else {
-                    // Se o vencedor não tem dado, preservamos o dado do perdedor.
-                    mergedVal |= (loserBlock << shift);
+                    // Um dos lados é vazio, pegamos o que tem dados
+                    finalBlock = winnerBlock | loserBlock;
                 }
+
+                mergedVal |= (finalBlock << shift);
             }
             result.set(key, mergedVal);
         }
