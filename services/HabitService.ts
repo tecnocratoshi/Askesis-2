@@ -76,6 +76,24 @@ export class HabitService {
     }
 
     /**
+     * EXPURGO PROFUNDO (Hard Delete).
+     * Remove fisicamente todas as entradas de log associadas a um ID de hábito.
+     * Isso libera memória e garante que "Apagar" realmente signifique apagar o histórico.
+     */
+    static pruneLogsForHabit(habitId: string) {
+        if (!state.monthlyLogs) return;
+        
+        // As chaves são compostas por "ID_ANO-MES".
+        // Podemos iterar e deletar tudo que começa com o ID.
+        for (const key of state.monthlyLogs.keys()) {
+            if (key.startsWith(habitId + '_')) {
+                state.monthlyLogs.delete(key);
+            }
+        }
+        state.uiDirtyState.chartData = true;
+    }
+
+    /**
      * Agrupa logs por mês para criação de shards granulares.
      */
     static getLogsGroupedByMonth(): Record<string, [string, string][]> {

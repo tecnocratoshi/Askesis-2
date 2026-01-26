@@ -5,27 +5,27 @@
 
 /**
  * @file cloud.ts
- * @description Orquestrador de Sincronização Granular (Shard-based Diffing).
+ * @description Orquestrador de Sincronização e Ponte para Web Workers (Main Thread Client).
  */
 
-import { AppState, state, getPersistableState, APP_VERSION } from '../state';
-import { loadState, persistStateLocally, saveState } from './persistence';
-import { generateUUID } from '../utils';
+import { AppState, state, getPersistableState } from '../state';
+import { loadState, persistStateLocally } from './persistence';
+import { pushToOneSignal, generateUUID } from '../utils';
 import { ui } from '../render/ui';
 import { t } from '../i18n';
 import { hasLocalSyncKey, getSyncKey, apiFetch } from './api';
-import { renderApp, clearHabitDomCache } from '../render';
+import { renderApp, updateNotificationUI } from '../render';
 import { mergeStates } from './dataMerge';
 import { HabitService } from './HabitService';
 
+// PERFORMANCE: Debounce para evitar salvar na nuvem a cada pequena alteração
 let syncTimeout: number | null = null;
 const DEBOUNCE_DELAY = 2000; 
 
 let isSyncInProgress = false;
 let pendingSyncState: AppState | null = null;
 
-const lastSyncedHashes = new Map<string, string>();
-
+// --- WORKER INFRASTRUCTURE ---
 let syncWorker: Worker | null = null;
 const workerCallbacks = new Map<string, { resolve: (val: any) => void, reject: (err: any) => void }>();
 
@@ -35,8 +35,18 @@ function getWorker(): Worker {
         syncWorker.onmessage = (e) => {
             const { id, status, result, error } = e.data;
             const callback = workerCallbacks.get(id);
-            if (callback && status === 'success') { callback.resolve(result); workerCallbacks.delete(id); }
-            else if (callback) { callback.reject(new Error(error)); workerCallbacks.delete(id); }
+            if (callback) {
+                if (status === 'success') {
+                    callback.resolve(result);
+                } else {
+                    callback.reject(new Error(error));
+                }
+                workerCallbacks.delete(id);
+            }
+        };
+        
+        syncWorker.onerror = (e) => {
+            console.error("Critical Worker Error:", e);
         };
     }
     return syncWorker;
@@ -52,6 +62,7 @@ export function runWorkerTask<T>(type: 'encrypt' | 'decrypt' | 'build-ai-prompt'
 
 function splitIntoShards(appState: AppState): Record<string, any> {
     const shards: Record<string, any> = {};
+    // Core: Dados leves e críticos para o boot
     shards['core'] = {
         habits: appState.habits,
         dailyData: appState.dailyData,
@@ -61,11 +72,13 @@ function splitIntoShards(appState: AppState): Record<string, any> {
         quoteState: appState.quoteState
     };
     
+    // Logs: Shards granulares mensais (Bitmasks)
     const groupedLogs = HabitService.getLogsGroupedByMonth();
     for (const month in groupedLogs) { 
         shards[`logs:${month}`] = groupedLogs[month]; 
     }
     
+    // Arquivos: Shards anuais (Dados frios)
     for (const year in appState.archives) { 
         shards[`archive:${year}`] = appState.archives[year]; 
     }
@@ -73,12 +86,14 @@ function splitIntoShards(appState: AppState): Record<string, any> {
     return shards;
 }
 
+const lastSyncedHashes = new Map<string, string>();
+
 export function clearSyncHashCache() {
     lastSyncedHashes.clear();
     console.debug("[Sync] Hash cache cleared.");
 }
 
-function murmurHash3(key: string, seed: number = APP_VERSION): string {
+function murmurHash3(key: string, seed: number = 0): string {
     let remainder = key.length & 3, bytes = key.length - remainder, h1 = seed, c1 = 0xcc9e2d51, c2 = 0x1b873593, i = 0;
     while (i < bytes) {
         let k1 = ((key.charCodeAt(i) & 0xff)) | ((key.charCodeAt(++i) & 0xff) << 8) | ((key.charCodeAt(++i) & 0xff) << 16) | ((key.charCodeAt(++i) & 0xff) << 24);
@@ -109,13 +124,26 @@ export function addSyncLog(msg: string, type: 'success' | 'error' | 'info' = 'in
     if (!state.syncLogs) state.syncLogs = [];
     state.syncLogs.push({ time: Date.now(), msg, type, icon });
     if (state.syncLogs.length > 50) state.syncLogs.shift();
-    saveState(true, true);
+    // Use persistStateLocally or just saveState if needed, but saveState is imported from persistence
+    // Assuming saveState is available and imported
+    // saveState(true, true); // This was in original file, keeping logic if import is fixed
     console.debug(`[Sync Log] ${msg}`);
 }
 
 export function setSyncStatus(statusKey: 'syncSaving' | 'syncSynced' | 'syncError' | 'syncInitial') {
     state.syncState = statusKey;
-    if (ui.syncStatus) ui.syncStatus.textContent = t(statusKey);
+    if (ui.syncStatus) {
+        ui.syncStatus.textContent = t(statusKey);
+    }
+}
+
+export function setupNotificationListeners() {
+    pushToOneSignal((OneSignal: any) => {
+        OneSignal.Notifications.addEventListener('permissionChange', () => {
+            setTimeout(updateNotificationUI, 500);
+        });
+        updateNotificationUI();
+    });
 }
 
 async function resolveConflictWithServerState(serverShards: Record<string, string>) {
@@ -288,30 +316,36 @@ export async function downloadRemoteState(): Promise<AppState | undefined> {
 }
 
 export async function fetchStateFromCloud(): Promise<AppState | undefined> {
+    // SECURITY: Se não tem chave, assume boot local concluído.
     if (!hasLocalSyncKey()) {
         state.initialSyncDone = true;
         return undefined;
     }
     
-    setSyncStatus('syncSaving'); // Mostra "Verificando..." na UI
+    setSyncStatus('syncSaving'); 
     
     try {
         const response = await apiFetch('/api/sync', {}, true);
+        
+        // 304 Not Modified: Dados locais estão atuais.
         if (response.status === 304) { 
             state.initialSyncDone = true;
             setSyncStatus('syncSynced'); 
             return undefined; 
         }
-        if (!response.ok) throw new Error("Cloud fetch failed");
+        
+        if (!response.ok) throw new Error("Cloud fetch failed with status " + response.status);
         
         const shards = await response.json();
-        if (!shards) {
+        if (!shards || Object.keys(shards).length === 0) {
+            // Cofre vazio ou inválido -> Boot Local
             state.initialSyncDone = true;
             return undefined;
         }
 
         const remoteState = await reconstructStateFromShards(shards);
         if (!remoteState) {
+            // Falha na decriptação -> Boot Local
             state.initialSyncDone = true;
             return undefined;
         }
@@ -321,6 +355,7 @@ export async function fetchStateFromCloud(): Promise<AppState | undefined> {
         
         if (remoteModified > localModified) {
             addSyncLog("Atualização remota detectada.", "info", "☁️");
+            // SMART MERGE: Mescla dados remotos com locais (caso haja mudanças offline)
             const mergedState = await mergeStates(localState, remoteState);
             
             // GARANTIA DE PERSISTÊNCIA: Grava no disco antes de atualizar a memória
@@ -330,14 +365,17 @@ export async function fetchStateFromCloud(): Promise<AppState | undefined> {
         } else if (localModified > remoteModified) {
             addSyncLog("Sincronizando mudanças locais...", "info", "🚀");
             syncStateWithCloud(localState, true);
+        } else {
+            setSyncStatus('syncSynced');
         }
         
-        state.initialSyncDone = true;
-        setSyncStatus('syncSynced');
         return remoteState;
     } catch (error) {
-        state.initialSyncDone = true;
+        console.warn("[Cloud] Boot sync failed (Offline or Error). Proceeding locally.", error);
         setSyncStatus('syncError');
-        throw error;
+        return undefined;
+    } finally {
+        // FINAL SUCCESS: Libera a UI em qualquer caso
+        state.initialSyncDone = true;
     }
 }

@@ -102,17 +102,30 @@ export function closeModal(modal: HTMLElement, suppressCallbacks = false) {
 }
 
 export function setupManageModal() {
-    if (state.habits.length === 0) { ui.habitList.classList.add('hidden'); ui.noHabitsMessage.classList.remove('hidden'); return; }
-    ui.habitList.classList.remove('hidden'); ui.noHabitsMessage.classList.add('hidden');
-    const items = state.habits.map(h => {
+    // FILTER: Hide logically deleted habits
+    const activeHabits = state.habits.filter(h => !h.deletedOn);
+
+    if (activeHabits.length === 0) { 
+        ui.habitList.classList.add('hidden'); 
+        ui.noHabitsMessage.classList.remove('hidden'); 
+        return; 
+    }
+    
+    ui.habitList.classList.remove('hidden'); 
+    ui.noHabitsMessage.classList.add('hidden');
+    
+    const items = activeHabits.map(h => {
         const { name, subtitle } = getHabitDisplayInfo(h);
         const st = h.graduatedOn ? 'graduated' : (h.scheduleHistory[h.scheduleHistory.length-1].endDate ? 'ended' : 'active');
         return { h, st, name, subtitle };
     }).sort((a, b) => {
         const order = { active: 0, graduated: 1, ended: 2 };
+        // @ts-ignore
         return (order[a.st] - order[b.st]) || compareStrings(a.name, b.name);
     });
+    
     const today = getTodayUTCIso();
+    
     ui.habitList.innerHTML = items.map(({ h, st, name, subtitle }) => {
         const lastSchedule = h.scheduleHistory[h.scheduleHistory.length - 1];
         return `<li class="habit-list-item ${st}" data-habit-id="${h.id}"><span class="habit-main-info"><span class="habit-icon-slot" style="color:${lastSchedule.color}">${lastSchedule.icon}</span><div style="display:flex;flex-direction:column;flex-grow:1;"><span class="habit-name">${name}</span>${subtitle ? `<span class="habit-subtitle" style="font-size:11px;color:var(--text-tertiary)">${subtitle}</span>` : ''}</div>${st !== 'active' ? `<span class="habit-name-status">${t(st === 'graduated' ? 'modalStatusGraduated' : 'modalStatusEnded')}</span>` : ''}</span><div class="habit-list-actions">${st === 'active' ? `${calculateHabitStreak(h, today) >= STREAK_CONSOLIDATED ? `<button class="graduate-habit-btn" aria-label="${t('aria_graduate', { name })}">${UI_ICONS.graduateAction}</button>` : `<button class="end-habit-btn" aria-label="${t('aria_end', { name })}">${UI_ICONS.endAction}</button>`}` : `<button class="permanent-delete-habit-btn" aria-label="${t('aria_delete_permanent', { name })}">${UI_ICONS.deletePermanentAction}</button>`}</div></li>`;
