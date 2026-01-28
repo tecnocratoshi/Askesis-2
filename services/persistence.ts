@@ -222,6 +222,8 @@ export async function loadState(cloudState?: AppState): Promise<AppState | null>
         
         // 4. Hydrate Result into Global State
         state.monthlyLogs = migrated.monthlyLogs;
+        // CRITICAL: Reset Lazy Sharding cache whenever state is replaced from storage/cloud.
+        HabitService.resetCache();
         
         // Fallback robusto: se a migração falhou em hidratar o Map, tenta recuperar dos dados brutos
         if ((!state.monthlyLogs || state.monthlyLogs.size === 0) && binaryLogsData) {
@@ -271,5 +273,6 @@ export const clearLocalPersistence = async () => {
     } catch (e) {
         console.warn("IDB clear failed", e);
     }
-    state.monthlyLogs = new Map();
+    // Use HabitService to clear logs and cache consistently
+    HabitService.clearAllLogs();
 };

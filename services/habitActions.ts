@@ -29,7 +29,7 @@ import {
 } from '../utils';
 import { 
     closeModal, showConfirmationModal, renderAINotificationState,
-    clearHabitDomCache
+    clearHabitDomCache, updateDayVisuals
 } from '../render';
 import { ui } from '../render/ui';
 import { t, getTimeOfDayName, formatDate, formatList, getAiLanguageName } from '../i18n'; 
@@ -80,8 +80,11 @@ function _notifyChanges(fullRebuild = false, immediate = false) {
 }
 
 function _notifyPartialUIRefresh(date: string, habitIds: string[]) {
+    // [OPTIMIZATION 2025-06-07] Surgical Update:
+    // Em vez de marcar o calendário inteiro como sujo (uiDirtyState.calendarVisuals = true),
+    // invalidamos os caches de dados e chamamos updateDayVisuals() diretamente para o dia afetado.
+    // Isso evita o reflow global da fita do calendário.
     invalidateCachesForDateChange(date, habitIds);
-    state.uiDirtyState.calendarVisuals = true;
     
     if (!state.initialSyncDone) {
         state.lastModified = state.lastModified + 1;
@@ -90,7 +93,13 @@ function _notifyPartialUIRefresh(date: string, habitIds: string[]) {
     }
 
     saveState();
-    ['render-app', 'habitsChanged'].forEach(ev => document.dispatchEvent(new CustomEvent(ev)));
+    
+    // Trigger visual updates in the next frame
+    requestAnimationFrame(() => {
+        updateDayVisuals(date);
+        // Os eventos abaixo ainda são necessários para charts, badges, etc.
+        ['render-app', 'habitsChanged'].forEach(ev => document.dispatchEvent(new CustomEvent(ev)));
+    });
 }
 
 function _lockActionHabit(habitId: string): Habit | null {
@@ -335,7 +344,15 @@ export function markAllHabitsForDate(dateISO: string, status: 'completed' | 'sno
             sch.forEach(t => { if (HabitService.getStatus(h.id, dateISO, t) !== bitStatus) { HabitService.setStatus(h.id, dateISO, t, bitStatus); changed = true; } });
             if (changed) { BATCH_IDS_POOL.push(h.id); BATCH_HABITS_POOL.push(h); }
         });
-        if (changed) { invalidateCachesForDateChange(dateISO, BATCH_IDS_POOL); if (status === 'completed') BATCH_HABITS_POOL.forEach(h => _checkStreakMilestones(h, dateISO)); _notifyChanges(false); }
+        if (changed) { 
+            invalidateCachesForDateChange(dateISO, BATCH_IDS_POOL); 
+            if (status === 'completed') BATCH_HABITS_POOL.forEach(h => _checkStreakMilestones(h, dateISO)); 
+            
+            // REDUNDANCY FIX: _notifyChanges(false) already triggers 'render-app' which rebuilds the UI.
+            // Calling updateDayVisuals here causes a double-paint or layout thrashing just before the rebuild.
+            // Removing the explicit surgical call as the batch operation warrants a full UI refresh anyway.
+            _notifyChanges(false); 
+        }
     } finally { _isBatchOpActive = false; }
     return changed;
 }

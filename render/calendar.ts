@@ -1,4 +1,3 @@
-
 /**
  * @license
  * SPDX-License-Identifier: Apache-2.0
@@ -44,6 +43,25 @@ const getFullCalendarDayTemplate = () => fullCalendarDayTemplate || (fullCalenda
 // --- CORE RENDERING (STRIP) ---
 
 /**
+ * Aplica visualmente os dados de progresso a um elemento de dia (Anel e Indicador +).
+ * DRY: Usado tanto na criação quanto na atualização cirúrgica.
+ */
+function applyDayVisuals(el: HTMLElement, dateISO: string, dateObj?: Date) {
+    const ringEl = el.querySelector(`.${CSS_CLASSES.DAY_PROGRESS_RING}`) as HTMLElement;
+    const numEl = ringEl.firstElementChild as HTMLElement;
+    
+    // Recalcula o sumário baseando-se no estado atual
+    const { completedPercent, snoozedPercent, showPlusIndicator } = calculateDaySummary(dateISO, dateObj);
+    
+    // CSS Variables drive the conic-gradient
+    ringEl.style.setProperty('--completed-percent', `${completedPercent}%`);
+    ringEl.style.setProperty('--snoozed-percent', `${snoozedPercent}%`);
+    
+    if (showPlusIndicator) numEl.classList.add('has-plus');
+    else numEl.classList.remove('has-plus');
+}
+
+/**
  * Cria um elemento de dia isolado.
  * SOURCE OF TRUTH: O dataset.date é a verdade absoluta para os listeners.
  */
@@ -63,10 +81,8 @@ function createDayElement(dateISO: string, isSelected: boolean, isToday: boolean
     if (isSelected) el.classList.add(CSS_CLASSES.SELECTED);
     if (isToday) el.classList.add(CSS_CLASSES.TODAY);
 
-    const { completedPercent, snoozedPercent, showPlusIndicator } = calculateDaySummary(dateISO, dateObj);
-    if (completedPercent > 0) ringEl.style.setProperty('--completed-percent', `${completedPercent}%`);
-    if (snoozedPercent > 0) ringEl.style.setProperty('--snoozed-percent', `${snoozedPercent}%`);
-    if (showPlusIndicator) numEl.classList.add('has-plus');
+    // Aplica visuais iniciais
+    applyDayVisuals(el, dateISO, dateObj);
 
     el.setAttribute('aria-label', dateObj.toLocaleDateString(state.activeLanguageCode, OPTS_ARIA));
     if (isSelected) {
@@ -80,6 +96,21 @@ function createDayElement(dateISO: string, isSelected: boolean, isToday: boolean
 }
 
 /**
+ * SURGICAL UPDATE: Atualiza apenas o visual de um dia específico sem recriar o DOM.
+ * Chamado quando um hábito é marcado/desmarcado.
+ */
+export function updateDayVisuals(dateISO: string) {
+    if (!ui.calendarStrip) return;
+    
+    // Busca o elemento específico. Se não existir (scroll off-screen), ignora.
+    const el = ui.calendarStrip.querySelector(`.${CSS_CLASSES.DAY_ITEM}[data-date="${dateISO}"]`) as HTMLElement;
+    
+    if (el) {
+        applyDayVisuals(el, dateISO);
+    }
+}
+
+/**
  * Renderiza a fita (Strip) centrada na data selecionada.
  * ESTRATÉGIA: Teletransporte (Hard Reset).
  * Limpa o DOM antigo e cria um novo universo de +/- 15 dias ao redor da data foco.
@@ -87,7 +118,8 @@ function createDayElement(dateISO: string, isSelected: boolean, isToday: boolean
 export function renderCalendar() {
     if (!ui.calendarStrip) return;
 
-    // Dirty Check para evitar re-render desnecessário
+    // PERFORMANCE CHECK: Só re-renderiza se houver flag de dirty OU se a fita estiver vazia.
+    // Isso protege contra re-renders acidentais disparados pelo loop principal.
     if (!state.uiDirtyState.calendarVisuals && ui.calendarStrip.children.length > 0) return;
 
     const centerDateISO = state.selectedDate || getTodayUTCIso();
@@ -106,6 +138,7 @@ export function renderCalendar() {
     ui.calendarStrip.innerHTML = ''; // Limpeza Total (GC Trigger)
     ui.calendarStrip.appendChild(frag);
     
+    // Reset Dirty Flag
     state.uiDirtyState.calendarVisuals = false;
     
     // Força o scroll para a posição correta (Teleporte)

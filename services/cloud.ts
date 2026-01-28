@@ -21,6 +21,7 @@ import { HabitService } from './HabitService';
 // PERFORMANCE: Debounce para evitar salvar na nuvem a cada pequena alteração
 let syncTimeout: number | null = null;
 const DEBOUNCE_DELAY = 2000; 
+const HASH_STORAGE_KEY = 'askesis_sync_hashes';
 
 let isSyncInProgress = false;
 let pendingSyncState: AppState | null = null;
@@ -64,7 +65,7 @@ function splitIntoShards(appState: AppState): Record<string, any> {
     const shards: Record<string, any> = {};
     // Core: Dados leves e críticos para o boot
     shards['core'] = {
-        version: appState.version, // SYNC FIX: Version must be synced to avoid re-migration issues
+        version: appState.version,
         habits: appState.habits,
         dailyData: appState.dailyData,
         dailyDiagnoses: appState.dailyDiagnoses,
@@ -74,6 +75,7 @@ function splitIntoShards(appState: AppState): Record<string, any> {
     };
     
     // Logs: Shards granulares mensais (Bitmasks)
+    // Usa o cache do HabitService para obter os dados já agrupados
     const groupedLogs = HabitService.getLogsGroupedByMonth();
     for (const month in groupedLogs) { 
         shards[`logs:${month}`] = groupedLogs[month]; 
@@ -87,10 +89,28 @@ function splitIntoShards(appState: AppState): Record<string, any> {
     return shards;
 }
 
-const lastSyncedHashes = new Map<string, string>();
+// PERF: Carrega hashes do localStorage para evitar re-upload no boot (Cold Start Optimization)
+const lastSyncedHashes: Map<string, string> = (() => {
+    try {
+        const raw = localStorage.getItem(HASH_STORAGE_KEY);
+        if (raw) return new Map(JSON.parse(raw));
+    } catch (e) {
+        console.warn("[Sync] Falha ao carregar cache de hashes", e);
+    }
+    return new Map();
+})();
+
+function persistHashCache() {
+    try {
+        localStorage.setItem(HASH_STORAGE_KEY, JSON.stringify(Array.from(lastSyncedHashes.entries())));
+    } catch (e) {
+        console.error("[Sync] Falha ao salvar cache de hashes", e);
+    }
+}
 
 export function clearSyncHashCache() {
     lastSyncedHashes.clear();
+    localStorage.removeItem(HASH_STORAGE_KEY);
     console.debug("[Sync] Hash cache cleared.");
 }
 
@@ -125,9 +145,6 @@ export function addSyncLog(msg: string, type: 'success' | 'error' | 'info' = 'in
     if (!state.syncLogs) state.syncLogs = [];
     state.syncLogs.push({ time: Date.now(), msg, type, icon });
     if (state.syncLogs.length > 50) state.syncLogs.shift();
-    // Use persistStateLocally or just saveState if needed, but saveState is imported from persistence
-    // Assuming saveState is available and imported
-    // saveState(true, true); // This was in original file, keeping logic if import is fixed
     console.debug(`[Sync Log] ${msg}`);
 }
 
@@ -185,14 +202,13 @@ async function resolveConflictWithServerState(serverShards: Record<string, strin
         const localState = getPersistableState();
         const mergedState = await mergeStates(localState, remoteState);
         
-        // CRITICAL SEQUENCE: Gravar fisicamente ANTES de hidratar a memória
         await persistStateLocally(mergedState);
         await loadState(mergedState);
         renderApp();
         
         setSyncStatus('syncSynced'); 
         addSyncLog("Mesclagem concluída.", "success", "✨");
-        lastSyncedHashes.clear();
+        clearSyncHashCache(); 
         syncStateWithCloud(mergedState, true);
     } catch (error: any) {
         addSyncLog(`Erro na resolução: ${error.message}`, "error", "❌");
@@ -211,15 +227,18 @@ async function performSync() {
     try {
         const rawShards = splitIntoShards(appState);
         const encryptedShards: Record<string, string> = {};
+        
+        const pendingHashUpdates = new Map<string, string>();
         let changeCount = 0;
 
         for (const shardName in rawShards) {
             const currentHash = murmurHash3(JSON.stringify(rawShards[shardName]));
             const lastHash = lastSyncedHashes.get(shardName);
+            
             if (currentHash !== lastHash) {
                 const encrypted = await runWorkerTask<string>('encrypt', rawShards[shardName], syncKey);
                 encryptedShards[shardName] = encrypted;
-                lastSyncedHashes.set(shardName, currentHash);
+                pendingHashUpdates.set(shardName, currentHash);
                 changeCount++;
             }
         }
@@ -240,11 +259,13 @@ async function performSync() {
         }, true);
 
         if (response.status === 409) {
-            lastSyncedHashes.clear();
+            clearSyncHashCache();
             await resolveConflictWithServerState(await response.json());
         } else if (response.ok) {
             addSyncLog("Nuvem atualizada.", "success", "✅");
             setSyncStatus('syncSynced');
+            pendingHashUpdates.forEach((hash, shard) => lastSyncedHashes.set(shard, hash));
+            persistHashCache();
             document.dispatchEvent(new CustomEvent('habitsChanged')); 
         } else {
             const errorData = await response.json().catch(() => ({}));
@@ -283,8 +304,11 @@ async function reconstructStateFromShards(shards: Record<string, string>): Promi
                 console.warn(`[Sync] Skip decrypt ${key}`, e);
             }
         }
+        
+        persistHashCache();
+
         const result: any = {
-            version: decryptedShards['core']?.version || 0, // SYNC FIX: Retrieve version to guide migration
+            version: decryptedShards['core']?.version || 0,
             lastModified: parseInt(shards.lastModified || '0', 10),
             habits: decryptedShards['core']?.habits || [],
             dailyData: decryptedShards['core']?.dailyData || {},
@@ -319,49 +343,35 @@ export async function downloadRemoteState(): Promise<AppState | undefined> {
 }
 
 export async function fetchStateFromCloud(): Promise<AppState | undefined> {
-    // SECURITY: Se não tem chave, assume boot local concluído.
     if (!hasLocalSyncKey()) {
         state.initialSyncDone = true;
         return undefined;
     }
-    
     setSyncStatus('syncSaving'); 
-    
     try {
         const response = await apiFetch('/api/sync', {}, true);
-        
-        // 304 Not Modified: Dados locais estão atuais.
         if (response.status === 304) { 
             state.initialSyncDone = true;
             setSyncStatus('syncSynced'); 
             return undefined; 
         }
-        
         if (!response.ok) throw new Error("Cloud fetch failed with status " + response.status);
-        
         const shards = await response.json();
         if (!shards || Object.keys(shards).length === 0) {
-            // Cofre vazio ou inválido -> Boot Local
             state.initialSyncDone = true;
             return undefined;
         }
-
         const remoteState = await reconstructStateFromShards(shards);
         if (!remoteState) {
-            // Falha na decriptação -> Boot Local
             state.initialSyncDone = true;
             return undefined;
         }
-
         const localState = getPersistableState();
         const remoteModified = remoteState.lastModified || 0, localModified = localState.lastModified || 0;
         
         if (remoteModified > localModified) {
             addSyncLog("Atualização remota detectada.", "info", "☁️");
-            // SMART MERGE: Mescla dados remotos com locais (caso haja mudanças offline)
             const mergedState = await mergeStates(localState, remoteState);
-            
-            // GARANTIA DE PERSISTÊNCIA: Grava no disco antes de atualizar a memória
             await persistStateLocally(mergedState);
             await loadState(mergedState);
             renderApp();
@@ -371,14 +381,12 @@ export async function fetchStateFromCloud(): Promise<AppState | undefined> {
         } else {
             setSyncStatus('syncSynced');
         }
-        
         return remoteState;
     } catch (error) {
         console.warn("[Cloud] Boot sync failed (Offline or Error). Proceeding locally.", error);
         setSyncStatus('syncError');
         return undefined;
     } finally {
-        // FINAL SUCCESS: Libera a UI em qualquer caso
         state.initialSyncDone = true;
     }
 }

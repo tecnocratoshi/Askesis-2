@@ -29,7 +29,7 @@ import {
 } from './utils';
 import { 
     closeModal, showConfirmationModal, renderAINotificationState,
-    clearHabitDomCache
+    clearHabitDomCache, updateDayVisuals
 } from './render';
 import { ui } from './render/ui';
 import { t, getTimeOfDayName, formatDate, formatList, getAiLanguageName } from './i18n'; 
@@ -69,7 +69,7 @@ function _notifyChanges(fullRebuild = false, immediate = false) {
     if (!state.initialSyncDone) {
         state.lastModified = state.lastModified + 1;
     } else {
-        state.lastModified = Math.max(Date.now(), state.lastModified + 1);
+        state.lastModified = Math.max(Date.now(), (state.lastModified || 0) + 1);
     }
 
     document.body.classList.remove('is-interaction-active', 'is-dragging-active');
@@ -80,17 +80,28 @@ function _notifyChanges(fullRebuild = false, immediate = false) {
 }
 
 function _notifyPartialUIRefresh(date: string, habitIds: string[]) {
+    // [OPTIMIZATION 2025-06-07] Surgical Update:
+    // Em vez de marcar o calendário inteiro como sujo (uiDirtyState.calendarVisuals = true),
+    // invalidamos os caches de dados e chamamos updateDayVisuals() diretamente para o dia afetado.
+    // Isso evita o reflow global da fita do calendário.
     invalidateCachesForDateChange(date, habitIds);
-    state.uiDirtyState.calendarVisuals = true;
+    
+    // state.uiDirtyState.calendarVisuals = true; // REMOVED: Managed surgically now
     
     if (!state.initialSyncDone) {
         state.lastModified = state.lastModified + 1;
     } else {
-        state.lastModified = Math.max(Date.now(), state.lastModified + 1);
+        state.lastModified = Math.max(Date.now(), (state.lastModified || 0) + 1);
     }
 
     saveState();
-    ['render-app', 'habitsChanged'].forEach(ev => document.dispatchEvent(new CustomEvent(ev)));
+    
+    // Trigger visual updates in the next frame
+    requestAnimationFrame(() => {
+        updateDayVisuals(date);
+        // Os eventos abaixo ainda são necessários para charts, badges, etc.
+        ['render-app', 'habitsChanged'].forEach(ev => document.dispatchEvent(new CustomEvent(ev)));
+    });
 }
 
 function _lockActionHabit(habitId: string): Habit | null {
@@ -173,7 +184,37 @@ const _applyHabitDeletion = async () => {
     const habit = state.habits.find(h => h.id === ctx.habitId);
     if (!habit) return ActionContext.reset();
 
-    habit.deletedOn = getSafeDate(state.selectedDate);
+    // 1. Marcação Lógica para Sync (Tombstone do Objeto Hábito)
+    // Para Hard Delete, definimos a data de deleção para o início da existência do hábito (ou antes),
+    // garantindo que ele não apareça em nenhum filtro de data (shouldHabitAppearOnDate).
+    habit.deletedOn = habit.createdOn;
+    
+    // 2. Limpeza Profunda de Logs (Bitmasks)
+    HabitService.pruneLogsForHabit(habit.id);
+
+    // 3. Limpeza Profunda de Dados Diários (Notas/Overrides em Memória)
+    Object.keys(state.dailyData).forEach(date => {
+        if (state.dailyData[date][habit.id]) {
+            delete state.dailyData[date][habit.id];
+            if (Object.keys(state.dailyData[date]).length === 0) {
+                delete state.dailyData[date];
+            }
+        }
+    });
+
+    // 4. Limpeza Profunda de Arquivos Mortos (Background Worker)
+    runWorkerTask<Record<string, any>>('prune-habit', { 
+        habitId: habit.id, 
+        archives: state.archives 
+    }).then(updatedArchives => {
+        Object.keys(updatedArchives).forEach(year => {
+            if (updatedArchives[year] === "") delete state.archives[year];
+            else state.archives[year] = updatedArchives[year];
+        });
+        state.unarchivedCache.clear();
+        saveState();
+    }).catch(e => console.error("Archive pruning failed", e));
+
     _notifyChanges(true, true);
     ActionContext.reset();
 };
@@ -305,7 +346,16 @@ export function markAllHabitsForDate(dateISO: string, status: 'completed' | 'sno
             sch.forEach(t => { if (HabitService.getStatus(h.id, dateISO, t) !== bitStatus) { HabitService.setStatus(h.id, dateISO, t, bitStatus); changed = true; } });
             if (changed) { BATCH_IDS_POOL.push(h.id); BATCH_HABITS_POOL.push(h); }
         });
-        if (changed) { invalidateCachesForDateChange(dateISO, BATCH_IDS_POOL); if (status === 'completed') BATCH_HABITS_POOL.forEach(h => _checkStreakMilestones(h, dateISO)); _notifyChanges(false); }
+        if (changed) { 
+            invalidateCachesForDateChange(dateISO, BATCH_IDS_POOL); 
+            if (status === 'completed') BATCH_HABITS_POOL.forEach(h => _checkStreakMilestones(h, dateISO)); 
+            
+            // BATCH OPTIMIZATION: Para mudanças em massa (Completar Dia), ainda usamos o refresh completo 
+            // ou podemos chamar updateDayVisuals se quisermos (já que todos os IDs afetados são do mesmo dia).
+            // Como afeta potencialmente todo o gráfico e visual do dia, usar _notifyChanges com updateDayVisuals é seguro.
+            requestAnimationFrame(() => updateDayVisuals(dateISO));
+            _notifyChanges(false); 
+        }
     } finally { _isBatchOpActive = false; }
     return changed;
 }

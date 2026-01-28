@@ -1,4 +1,3 @@
-
 /**
  * @license
  * SPDX-License-Identifier: Apache-2.0
@@ -31,8 +30,9 @@ export * from './render/habits';
 export * from './render/modals';
 export * from './render/chart';
 
-// EXPORT FIX: Garante que clearHabitDomCache esteja disponível para o cloud.ts
+// EXPORT FIX: Garante que funções de limpeza e atualização cirúrgica estejam disponíveis
 export { clearHabitDomCache } from './render/habits';
+export { updateDayVisuals } from './render/calendar';
 
 let _lastTitleDate: string | null = null;
 let _lastTitleLang: string | null = null;

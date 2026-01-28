@@ -12,6 +12,27 @@ import { state, PERIOD_OFFSET, TimeOfDay } from '../state';
 
 export class HabitService {
 
+    // --- LAZY SHARDING CACHE ---
+    // Armazena as strings serializadas (Hex) agrupadas por mês.
+    // Evita reprocessar meses que não sofreram alterações.
+    private static shardCache = new Map<string, [string, string][]>();
+    
+    // Rastreia quais meses foram tocados desde o último sync/geração.
+    private static dirtyMonths = new Set<string>();
+
+    /**
+     * Limpa o cache completamente.
+     * Deve ser chamado sempre que o estado global (state.monthlyLogs) for substituído (ex: Load/Import).
+     */
+    static resetCache() {
+        this.shardCache.clear();
+        this.dirtyMonths.clear();
+    }
+
+    private static markDirty(month: string) {
+        this.dirtyMonths.add(month);
+    }
+
     private static getLogKey(habitId: string, dateISO: string): string {
         return `${habitId}_${dateISO.substring(0, 7)}`; // ID_YYYY-MM
     }
@@ -72,6 +93,10 @@ export class HabitService {
         const newLog = (currentLog & clearMask) | (valToStore << bitPos);
         
         state.monthlyLogs.set(key, newLog);
+        
+        // LAZY SHARDING: Marca o mês como sujo
+        this.markDirty(dateISO.substring(0, 7));
+        
         state.uiDirtyState.chartData = true;
     }
 
@@ -83,10 +108,15 @@ export class HabitService {
     static pruneLogsForHabit(habitId: string) {
         if (!state.monthlyLogs) return;
         
+        const prefix = habitId + '_';
         // As chaves são compostas por "ID_ANO-MES".
-        // Podemos iterar e deletar tudo que começa com o ID.
         for (const key of state.monthlyLogs.keys()) {
-            if (key.startsWith(habitId + '_')) {
+            if (key.startsWith(prefix)) {
+                // Extrai o mês (parte final após o ID) para marcar como dirty
+                // ID pode conter underscores, mas o formato é sufixado por _YYYY-MM (7 chars)
+                const month = key.slice(-7);
+                this.markDirty(month);
+                
                 state.monthlyLogs.delete(key);
             }
         }
@@ -95,27 +125,58 @@ export class HabitService {
 
     /**
      * Agrupa logs por mês para criação de shards granulares.
+     * IMPLEMENTAÇÃO LAZY: Só regenera shards para meses marcados como 'dirty'.
      */
     static getLogsGroupedByMonth(): Record<string, [string, string][]> {
-        const groups: Record<string, [string, string][]> = {};
-        if (!state.monthlyLogs) return groups;
-
-        for (const [key, val] of state.monthlyLogs.entries()) {
-            const month = key.split('_').pop() || 'unknown';
-            if (!groups[month]) groups[month] = [];
-            groups[month].push([key, "0x" + val.toString(16)]);
+        // Se o mapa principal estiver vazio ou nulo, limpa tudo.
+        if (!state.monthlyLogs || state.monthlyLogs.size === 0) {
+            this.resetCache();
+            return {};
         }
-        return groups;
+
+        // FAST PATH: Se nada mudou e temos cache, retorna o cache diretamente.
+        if (this.dirtyMonths.size === 0 && this.shardCache.size > 0) {
+            return Object.fromEntries(this.shardCache);
+        }
+
+        const tempRegen = new Map<string, [string, string][]>();
+
+        // Varredura para regenerar apenas o necessário
+        // Nota: Iterar sobre o mapa é rápido; a serialização (toString(16)) é que é custosa.
+        for (const [key, val] of state.monthlyLogs.entries()) {
+            const month = key.slice(-7); // Extrai YYYY-MM
+            
+            // Só processa se o mês estiver sujo OU se não estiver no cache (primeira execução)
+            if (this.dirtyMonths.has(month) || !this.shardCache.has(month)) {
+                if (!tempRegen.has(month)) tempRegen.set(month, []);
+                tempRegen.get(month)!.push([key, "0x" + val.toString(16)]);
+            }
+        }
+
+        // Atualiza o Cache
+        // 1. Adiciona/Atualiza meses regenerados
+        for (const [month, data] of tempRegen) {
+            this.shardCache.set(month, data);
+        }
+        
+        // 2. Remove do cache meses que estavam sujos mas não existem mais no mapa (foram deletados)
+        for (const month of this.dirtyMonths) {
+            if (!tempRegen.has(month)) {
+                this.shardCache.delete(month);
+            }
+        }
+
+        this.dirtyMonths.clear();
+        return Object.fromEntries(this.shardCache);
     }
 
     /**
      * Serialização para Cloud (Hexadecimal).
+     * Usa a lógica cacheada de getLogsGroupedByMonth para eficiência.
      */
     static serializeLogsForCloud(): [string, string][] {
-        if (!state.monthlyLogs) return [];
-        return Array.from(state.monthlyLogs.entries()).map(([key, val]) => {
-            return [key, "0x" + val.toString(16)] as [string, string];
-        });
+        const grouped = this.getLogsGroupedByMonth();
+        return Object.values(grouped).flat();
     }
 
     /**
@@ -131,15 +192,12 @@ export class HabitService {
                 console.warn(`[HabitService] Skipping invalid hex log: ${key}`);
             }
         });
+        // Como estamos injetando dados externos, invalidamos o cache para garantir consistência.
+        this.resetCache();
     }
     
     /**
      * INTELLIGENT MERGE (CRDT-Lite para Bitmasks).
-     * Itera bloco por bloco (93 blocos por mês).
-     * Lógica de Resolução de Conflitos:
-     * 1. Se um lado tem Tombstone (4n), ele vence (Delete Wins).
-     * 2. Se ambos têm dados, a União (OR) preserva o bit de maior valor (ex: Done+ > Done).
-     * 3. Se apenas um tem dados, ele vence.
      */
     static mergeLogs(winnerMap: Map<string, bigint> | undefined, loserMap: Map<string, bigint> | undefined): Map<string, bigint> {
         const result = new Map<string, bigint>(winnerMap || []);
@@ -162,14 +220,10 @@ export class HabitService {
                 const loserTomb = (loserBlock & 4n) === 4n;
 
                 if (winnerTomb || loserTomb) {
-                    // Se qualquer um dos lados diz "Delete", respeitamos a deleção.
                     finalBlock = 4n; 
                 } else if (winnerBlock !== 0n && loserBlock !== 0n) {
-                    // Conflito de Valores Positivos: União Bitwise para preservar o estado mais "alto"
-                    // Ex: Done (1) | Done+ (3) = Done+ (3)
                     finalBlock = winnerBlock | loserBlock;
                 } else {
-                    // Um dos lados é vazio, pegamos o que tem dados
                     finalBlock = winnerBlock | loserBlock;
                 }
 
@@ -182,6 +236,7 @@ export class HabitService {
 
     static clearAllLogs() {
         state.monthlyLogs = new Map();
+        this.resetCache();
         state.uiDirtyState.chartData = true;
     }
 }
