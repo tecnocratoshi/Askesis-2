@@ -25,7 +25,11 @@ import { renderApp, initI18n, updateUIText } from './render';
 import { setupEventListeners } from './listeners';
 import { handleDayTransition, performArchivalCheck } from './services/habitActions';
 import { initSync } from './listeners/sync';
-import { fetchStateFromCloud, syncStateWithCloud, setSyncStatus } from './services/cloud';
+import { fetchStateFromCloud, syncStateWithCloud, setSyncStatus, printSyncDiagnostics } from './services/cloud';
+// Expor funções de debug no console global
+if (typeof window !== 'undefined') {
+    (window as any).printSyncDiagnostics = printSyncDiagnostics;
+}
 import { hasLocalSyncKey, initAuth } from './services/api';
 import { updateAppBadge } from './services/badge';
 import { setupMidnightLoop } from './utils';
