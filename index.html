@@ -34,9 +34,6 @@
     <title>Askesis</title>
     
     <!-- PERFORMANCE: Resource Hints. Instruem o navegador a baixar assets críticos em alta prioridade. -->
-    <link rel="preload" href="bundle.css" as="style">
-    <!-- OPTIMIZATION: 'modulepreload' garante o tratamento correto de credenciais/cache para ESM. -->
-    <link rel="modulepreload" href="bundle.js">
     
     <!-- PERFORMANCE: Network Socket Warming. 
          Inicia o handshake DNS/TCP/TLS com o CDN do OneSignal antes que o parser encontre a tag de script.
@@ -634,6 +631,5 @@
         </div>
     </div>
 
-    <script src="bundle.js" type="module"></script>
 </body>
 </html>

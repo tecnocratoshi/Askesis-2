@@ -4,8 +4,9 @@
   "version": "1.0.0",
   "description": "A dynamic habit tracker with data visualization and personalized AI-powered feedback.",
   "scripts": {
-    "dev": "node build.js",
-    "build": "NODE_ENV=production node build.js",
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
     "test": "vitest run",
     "test:ui": "vitest --ui",
     "test:watch": "vitest"
