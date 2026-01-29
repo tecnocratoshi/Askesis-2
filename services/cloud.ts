@@ -430,29 +430,9 @@ async function performSync() {
         const errorMsg = error.message || String(error);
         recordSyncAttempt(0, false, errorMsg);
         
-        // ===== DETERMINE IF ERROR IS RETRYABLE =====
-        // Erros que NÃO devem fazer retry (permanentes):
-        const isJsonError = errorMsg.includes('JSON_PARSE_ERROR') || 
-                           errorMsg.includes('Failed to serialize') ||
-                           errorMsg.includes('Encryption failed') ||
-                           errorMsg.includes('too large');
-        
-        const isValidationError = errorMsg.includes('INVALID_SHARDS_TYPE') ||
-                                 errorMsg.includes('TOO_MANY_SHARDS') ||
-                                 errorMsg.includes('SHARD_NOT_STRING');
-        
-        // Erros que SÃO retryable (temporários):
-        const isNetworkError = errorMsg.includes('Network') ||
-                              errorMsg.includes('timeout') ||
-                              errorMsg.includes('ERR_');
-        
-        const isServerError = errorMsg.includes('500') ||
-                             errorMsg.includes('502') ||
-                             errorMsg.includes('503') ||
-                             errorMsg.includes('429') ||
-                             errorMsg.includes('Lua Execution Error'); // Lua errors podem ser temporários em alguns casos
-        
-        const isRetryable = isNetworkError || (isServerError && !isJsonError && !isValidationError);
+        // ===== IMPROVED ERROR CLASSIFICATION =====
+        const errorClassification = classifyError(errorMsg);
+        const isRetryable = errorClassification.isRetryable;
         
         // ===== RETRY LOGIC (apenas para erros temporários) =====
         if (isRetryable && syncRetryAttempt < RETRY_CONFIG.maxAttempts) {
@@ -461,7 +441,7 @@ async function performSync() {
             const nextDelay = calculateRetryDelay(syncRetryAttempt - 1);
             
             addSyncLog(
-                `Falha no envio: ${errorMsg}. Tentativa ${syncRetryAttempt}/${RETRY_CONFIG.maxAttempts} em ${(nextDelay/1000).toFixed(1)}s...`,
+                `Falha no envio: ${errorClassification.displayMessage}. Tentativa ${syncRetryAttempt}/${RETRY_CONFIG.maxAttempts} em ${(nextDelay/1000).toFixed(1)}s...`,
                 "error",
                 "🔄"
             );
@@ -470,7 +450,8 @@ async function performSync() {
                 attempt: syncRetryAttempt,
                 delayMs: nextDelay,
                 error: errorMsg,
-                isRetryable
+                type: errorClassification.type,
+                isRetryable: true
             });
             
             isSyncInProgress = false;
@@ -484,9 +465,12 @@ async function performSync() {
         }
         
         // ===== FINAL ERROR (não-retryable ou max tentativas) =====
-        const finalMsg = !isRetryable ? 
-            `Erro não-recuperável: ${errorMsg}` :
-            `Falha após ${RETRY_CONFIG.maxAttempts} tentativas: ${errorMsg}`;
+        let finalMsg: string;
+        if (!isRetryable) {
+            finalMsg = `❌ Erro: ${errorClassification.displayMessage}`;
+        } else {
+            finalMsg = `❌ Falha após ${RETRY_CONFIG.maxAttempts} tentativas: ${errorClassification.displayMessage}`;
+        }
         
         addSyncLog(finalMsg, "error", "⚠️");
         
@@ -495,9 +479,7 @@ async function performSync() {
             stack: error.stack,
             timestamp: new Date().toISOString(),
             retries: syncRetryAttempt,
-            isRetryable,
-            isJsonError,
-            isValidationError
+            classification: errorClassification
         });
         
         syncRetryAttempt = 0; // Reset para próxima tentativa de sync normal
@@ -506,6 +488,114 @@ async function performSync() {
         isSyncInProgress = false;
         // NÃO agendar nova sincronização aqui - deixar que o sistema normal a agende
     }
+}
+
+// ===== ERROR CLASSIFICATION HELPER =====
+interface ErrorClassification {
+    type: string;
+    isRetryable: boolean;
+    displayMessage: string;
+    category: 'VALIDATION' | 'NETWORK' | 'TEMPORARY' | 'UNKNOWN';
+}
+
+function classifyError(errorMsg: string): ErrorClassification {
+    const msg = errorMsg.toLowerCase();
+    
+    // Erros permanentes - JSON e validação
+    if (msg.includes('json_parse_error') || msg.includes('failed to serialize') || msg.includes('json')) {
+        return {
+            type: 'INVALID_JSON',
+            isRetryable: false,
+            displayMessage: 'Dados inválidos não podem ser sincronizados',
+            category: 'VALIDATION'
+        };
+    }
+    
+    if (msg.includes('invalid_shards_type') || msg.includes('shard_not_string') || 
+        msg.includes('too_many_shards') || msg.includes('validation')) {
+        return {
+            type: 'VALIDATION_ERROR',
+            isRetryable: false,
+            displayMessage: 'Estrutura de dados não suportada',
+            category: 'VALIDATION'
+        };
+    }
+    
+    if (msg.includes('encryption failed') || msg.includes('too large')) {
+        return {
+            type: 'INVALID_DATA',
+            isRetryable: false,
+            displayMessage: 'Dados não podem ser processados (muito grandes ou formato inválido)',
+            category: 'VALIDATION'
+        };
+    }
+    
+    // Erros de rede - sempre retryable
+    if (msg.includes('network') || msg.includes('failed to fetch') || msg.includes('err_') || 
+        msg.includes('econnrefused') || msg.includes('enotfound')) {
+        return {
+            type: 'NETWORK_ERROR',
+            isRetryable: true,
+            displayMessage: 'Erro de conexão (será retentado automaticamente)',
+            category: 'NETWORK'
+        };
+    }
+    
+    // Erros de servidor temporários
+    if (msg.includes('timeout') || msg.includes('timed out')) {
+        return {
+            type: 'TIMEOUT',
+            isRetryable: true,
+            displayMessage: 'Servidor respondendo lentamente (será retentado)',
+            category: 'TEMPORARY'
+        };
+    }
+    
+    if (msg.includes('503') || msg.includes('unavailable')) {
+        return {
+            type: 'SERVICE_UNAVAILABLE',
+            isRetryable: true,
+            displayMessage: 'Serviço temporariamente indisponível (será retentado)',
+            category: 'TEMPORARY'
+        };
+    }
+    
+    if (msg.includes('502') || msg.includes('503') || msg.includes('500')) {
+        return {
+            type: 'SERVER_ERROR',
+            isRetryable: true,
+            displayMessage: 'Erro no servidor (será retentado)',
+            category: 'TEMPORARY'
+        };
+    }
+    
+    // Erros Lua específicos
+    if (msg.includes('lua_execution_error') || msg.includes('lua')) {
+        // Tentar clasificar o tipo de erro Lua
+        if (msg.includes('timeout')) {
+            return {
+                type: 'LUA_TIMEOUT',
+                isRetryable: true,
+                displayMessage: 'Script excedeu tempo limite (será retentado)',
+                category: 'TEMPORARY'
+            };
+        }
+        // Padrão para Lua error desconhecido - tente retry
+        return {
+            type: 'LUA_ERROR',
+            isRetryable: true,
+            displayMessage: 'Erro ao processar sincronização (será retentado)',
+            category: 'TEMPORARY'
+        };
+    }
+    
+    // Padrão desconhecido - não retry por segurança
+    return {
+        type: 'UNKNOWN',
+        isRetryable: false,
+        displayMessage: `Erro desconhecido: ${errorMsg.slice(0, 50)}...`,
+        category: 'UNKNOWN'
+    };
 }
 
 export function syncStateWithCloud(appState: AppState, immediate = false) {
@@ -662,4 +752,194 @@ export function resetSyncTelemetry() {
     syncRetryAttempt = 0;
     saveTelemetry();
     console.info("[Telemetry] Resetado com sucesso");
+}
+
+// ===== ADVANCED DEBUGGING FUNCTIONS =====
+
+/**
+ * Retorna histórico completo de logs de sincronização
+ * Útil para diagnosticar padrões de erro
+ */
+export function getSyncLogs() {
+    return (state.syncLogs || []).map(log => ({
+        time: new Date(log.time).toISOString(),
+        message: log.msg,
+        type: log.type,
+        icon: log.icon
+    }));
+}
+
+/**
+ * Analisa o padrão de erros recentes
+ * Retorna insights sobre o que está falhando
+ */
+export function analyzeSyncErrors() {
+    const logs = state.syncLogs || [];
+    const recentLogs = logs.slice(-20); // Últimos 20 logs
+    
+    const analysis = {
+        totalErrors: recentLogs.filter(l => l.type === 'error').length,
+        errorPatterns: new Map<string, number>(),
+        recentErrors: [] as any[],
+        retry_attempts: syncRetryAttempt,
+        is_currently_syncing: isSyncInProgress
+    };
+    
+    for (const log of recentLogs) {
+        if (log.type === 'error') {
+            // Extrair tipo de erro
+            const match = log.msg.match(/Falha no envio: (.+?)\./);
+            if (match) {
+                const errorType = match[1].split(':')[0]; // Pega primeira parte antes de ':'
+                analysis.errorPatterns.set(
+                    errorType,
+                    (analysis.errorPatterns.get(errorType) || 0) + 1
+                );
+            }
+            analysis.recentErrors.push({
+                time: new Date(log.time).toISOString(),
+                message: log.msg
+            });
+        }
+    }
+    
+    // Converter Map para objeto para melhor visualização
+    const patterns: Record<string, number> = {};
+    for (const [key, value] of analysis.errorPatterns) {
+        patterns[key] = value;
+    }
+    
+    return {
+        totalErrors: analysis.totalErrors,
+        errorPatterns: patterns,
+        recentErrors: analysis.recentErrors,
+        retryAttempts: analysis.retry_attempts,
+        currentlySyncing: analysis.is_currently_syncing,
+        lastErrorAt: analysis.recentErrors[analysis.recentErrors.length - 1]?.time || null,
+        recommendation: generateSyncRecommendation(patterns)
+    };
+}
+
+/**
+ * Gera recomendação com base no padrão de erros
+ */
+function generateSyncRecommendation(patterns: Record<string, number>): string {
+    const maxErrors = Math.max(...Object.values(patterns), 0);
+    
+    if (maxErrors === 0) {
+        return "✅ Nenhum erro detectado";
+    }
+    
+    const topError = Object.entries(patterns).sort(([, a], [, b]) => b - a)[0];
+    if (!topError) return "Status desconhecido";
+    
+    const [errorType, count] = topError;
+    
+    if (errorType.includes('JSON') || errorType.includes('Validation')) {
+        return `⚠️ Erro recorrente de validação (${count}x). Verifique se há dados corrompidos. Tente limpar cache.`;
+    }
+    if (errorType.includes('Timeout') || errorType.includes('Lua')) {
+        return `⚠️ Servidor respondendo lentamente (${count}x). Sistema tentando automaticamente.`;
+    }
+    if (errorType.includes('Network')) {
+        return `🌐 Problema de rede (${count}x). Verifique sua conexão.`;
+    }
+    if (errorType.includes('Conflito')) {
+        return `🔄 Conflito de versão (${count}x). Sincronização em progresso.`;
+    }
+    
+    return `⚠️ Padrão de erro detectado: ${errorType} (${count}x). Verifique console para detalhes.`;
+}
+
+/**
+ * Simula um erro de sincronização para testes
+ * @param errorType - Tipo de erro a simular
+ */
+export function triggerTestSyncError(errorType: 'network' | 'lua' | 'validation' | 'timeout' = 'lua') {
+    const errorMessages: Record<string, string> = {
+        'network': 'Network error: Failed to fetch',
+        'lua': 'TIMEOUT: Script Lua excedeu tempo limite (retryable)',
+        'validation': 'INVALID_JSON: Payload JSON malformado (não-retryable)',
+        'timeout': 'TIMEOUT: Script Lua excedeu tempo limite (retryable)'
+    };
+    
+    const errorMsg = errorMessages[errorType] || errorMessages.lua;
+    console.warn(`[Test] Simulando erro de tipo: ${errorType}`);
+    
+    // Simular o erro no fluxo
+    recordSyncAttempt(0, false, errorMsg);
+    
+    const classification = classifyError(errorMsg);
+    console.log('[Test] Classificação:', classification);
+    
+    addSyncLog(`🧪 Erro simulado: ${classification.displayMessage}`, 'error', '⚠️');
+}
+
+/**
+ * Exporta diagnóstico completo para arquivo
+ * Útil para reportar bugs
+ */
+export function exportSyncDiagnostics() {
+    const diagnostics = {
+        timestamp: new Date().toISOString(),
+        syncStatus: getSyncStatus(),
+        telemetry: getSyncTelemetry(),
+        logs: getSyncLogs(),
+        analysis: analyzeSyncErrors(),
+        retryCount: getSyncRetryCount(),
+        isSyncing: isSyncInProgress
+    };
+    
+    return diagnostics;
+}
+
+/**
+ * Imprime diagnóstico formatado no console
+ */
+export function printSyncDiagnostics() {
+    const diag = exportSyncDiagnostics();
+    
+    console.log('%c=== SYNC DIAGNOSTICS ===', 'color: blue; font-weight: bold; font-size: 14px');
+    console.log('Timestamp:', diag.timestamp);
+    console.log('');
+    
+    console.log('%c📊 STATUS', 'color: green; font-weight: bold');
+    console.table(diag.syncStatus);
+    console.log('');
+    
+    console.log('%c📈 TELEMETRIA', 'color: blue; font-weight: bold');
+    console.table({
+        'Total de Syncs': diag.telemetry.totalSyncs,
+        'Sucesso': diag.telemetry.successfulSyncs,
+        'Falhas': diag.telemetry.failedSyncs,
+        'Taxa Sucesso': `${((diag.telemetry.successfulSyncs / Math.max(1, diag.telemetry.totalSyncs)) * 100).toFixed(1)}%`,
+        'Payload Médio': `${diag.telemetry.avgPayloadBytes} bytes`,
+        'Payload Máximo': `${diag.telemetry.maxPayloadBytes} bytes`
+    });
+    console.log('');
+    
+    if (diag.telemetry.lastError) {
+        console.log('%c❌ ÚLTIMO ERRO', 'color: red; font-weight: bold');
+        console.log('Mensagem:', diag.telemetry.lastError.message);
+        console.log('Timestamp:', new Date(diag.telemetry.lastError.timestamp).toISOString());
+        console.log('');
+    }
+    
+    console.log('%c🔍 ANÁLISE DE PADRÕES', 'color: purple; font-weight: bold');
+    console.log('Total de erros (últimos 20 logs):', diag.analysis.totalErrors);
+    console.log('Padrões de erro:', diag.analysis.errorPatterns);
+    console.log('Recomendação:', diag.analysis.recommendation);
+    console.log('');
+    
+    console.log('%c📋 LOGS RECENTES', 'color: gray; font-weight: bold');
+    const recentLogs = diag.logs.slice(-10);
+    for (const log of recentLogs) {
+        const style = log.type === 'error' ? 'color: red' : log.type === 'success' ? 'color: green' : 'color: gray';
+        console.log(`%c[${log.time}] ${log.icon || ''} ${log.message}`, style);
+    }
+    console.log('');
+    
+    console.log('%c✅ STATUS', 'color: blue; font-weight: bold');
+    console.log('Atualmente sincronizando:', diag.isSyncing);
+    console.log('Tentativas de retry em andamento:', diag.retryCount);
 }
