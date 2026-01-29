@@ -21,14 +21,14 @@
   "license": "ISC",
   "dependencies": {
     "@google/genai": "^1.33.0",
-    "@vercel/kv": "^3.0.0",
-    "@vercel/analytics": "^1.5.0"
+    "@vercel/analytics": "^1.5.0",
+    "@vercel/kv": "^3.0.0"
   },
   "devDependencies": {
     "@types/node": "^20.14.8",
-    "@vitest/ui": "^1.6.0",
-    "esbuild": "^0.21.4",
-    "vitest": "^1.6.0",
-    "happy-dom": "^14.12.0"
+    "@vitest/ui": "^4.0.18",
+    "esbuild": "^0.27.2",
+    "happy-dom": "^20.4.0",
+    "vitest": "^4.0.18"
   }
 }
