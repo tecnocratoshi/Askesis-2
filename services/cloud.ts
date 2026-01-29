@@ -94,7 +94,8 @@ function recordSyncAttempt(payloadSize: number, success: boolean, error?: string
     
     if (success) {
         syncTelemetry.successfulSyncs++;
-        syncRetryAttempt = 0; // Reset retry counter
+        // Reset retry counter on success
+        syncRetryAttempt = 0;
     } else {
         syncTelemetry.failedSyncs++;
         if (error) {
@@ -104,20 +105,26 @@ function recordSyncAttempt(payloadSize: number, success: boolean, error?: string
         }
     }
     
-    // Atualizar estatísticas de payload
-    syncTelemetry.totalPayloadBytes += payloadSize;
-    if (payloadSize > syncTelemetry.maxPayloadBytes) {
-        syncTelemetry.maxPayloadBytes = payloadSize;
+    // Atualizar estatísticas de payload (mesmo em erro, para rastrear tentativas falhadas)
+    if (payloadSize > 0) {
+        syncTelemetry.totalPayloadBytes += payloadSize;
+        if (payloadSize > syncTelemetry.maxPayloadBytes) {
+            syncTelemetry.maxPayloadBytes = payloadSize;
+        }
+        syncTelemetry.avgPayloadBytes = Math.round(
+            syncTelemetry.totalPayloadBytes / Math.max(1, syncTelemetry.totalSyncs)
+        );
     }
-    syncTelemetry.avgPayloadBytes = Math.round(
-        syncTelemetry.totalPayloadBytes / Math.max(1, syncTelemetry.totalSyncs)
-    );
     
     saveTelemetry();
     
     // Log para debugging
     console.debug('[Sync Telemetry]', {
         sync: `${syncTelemetry.successfulSyncs}/${syncTelemetry.totalSyncs}`,
+        payload: `${payloadSize} bytes`,
+        error: error || 'none'
+    });
+}
         payload: `${payloadSize} bytes`,
         error: error || 'none'
     });
@@ -425,8 +432,9 @@ async function performSync() {
         
         // ===== RETRY LOGIC =====
         if (syncRetryAttempt < RETRY_CONFIG.maxAttempts) {
-            const nextDelay = calculateRetryDelay(syncRetryAttempt);
+            // Incrementar ANTES de calcular o delay
             syncRetryAttempt++;
+            const nextDelay = calculateRetryDelay(syncRetryAttempt - 1);
             
             addSyncLog(
                 `Falha no envio: ${errorMsg}. Tentativa ${syncRetryAttempt}/${RETRY_CONFIG.maxAttempts} em ${(nextDelay/1000).toFixed(1)}s...`,
@@ -464,15 +472,11 @@ async function performSync() {
             retries: syncRetryAttempt
         });
         
+        syncRetryAttempt = 0; // Reset para próxima tentativa de sync normal
         setSyncStatus('syncError');
     } finally {
         isSyncInProgress = false;
-        if (pendingSyncState) {
-            // Se há mudanças pendentes e não estamos em retry, agendar próxima sincronização
-            if (!syncTimeout) {
-                setTimeout(performSync, 500);
-            }
-        }
+        // NÃO agendar nova sincronização aqui - deixar que o sistema normal a agende
     }
 }
 
