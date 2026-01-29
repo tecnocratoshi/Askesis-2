@@ -145,7 +145,18 @@ export default async function handler(req: Request) {
             const errorMsg = result[1] || 'Lua execution error';
             const detailedError = typeof errorMsg === 'string' ? errorMsg : String(errorMsg);
             console.error("Lua error details:", detailedError);
-            return new Response(JSON.stringify({ error: detailedError }), { status: 400, headers: HEADERS_BASE });
+            
+            // Determine if error is retryable based on error type
+            // JSON parse errors are likely permanent (bad data)
+            // But other Lua errors might be temporary (server issue)
+            const isJsonError = detailedError.includes('JSON_PARSE_ERROR');
+            const isValidationError = detailedError.includes('INVALID_SHARDS_TYPE') || 
+                                     detailedError.includes('SHARD_NOT_STRING') ||
+                                     detailedError.includes('TOO_MANY_SHARDS');
+            
+            // Return 400 for validation/JSON errors (not retryable), 500 for other Lua errors (retryable)
+            const statusCode = (isJsonError || isValidationError) ? 400 : 500;
+            return new Response(JSON.stringify({ error: detailedError }), { status: statusCode, headers: HEADERS_BASE });
         }
 
         return new Response(null, { status: 405 });

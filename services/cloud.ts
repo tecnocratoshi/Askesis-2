@@ -430,8 +430,32 @@ async function performSync() {
         const errorMsg = error.message || String(error);
         recordSyncAttempt(0, false, errorMsg);
         
-        // ===== RETRY LOGIC =====
-        if (syncRetryAttempt < RETRY_CONFIG.maxAttempts) {
+        // ===== DETERMINE IF ERROR IS RETRYABLE =====
+        // Erros que NÃO devem fazer retry (permanentes):
+        const isJsonError = errorMsg.includes('JSON_PARSE_ERROR') || 
+                           errorMsg.includes('Failed to serialize') ||
+                           errorMsg.includes('Encryption failed') ||
+                           errorMsg.includes('too large');
+        
+        const isValidationError = errorMsg.includes('INVALID_SHARDS_TYPE') ||
+                                 errorMsg.includes('TOO_MANY_SHARDS') ||
+                                 errorMsg.includes('SHARD_NOT_STRING');
+        
+        // Erros que SÃO retryable (temporários):
+        const isNetworkError = errorMsg.includes('Network') ||
+                              errorMsg.includes('timeout') ||
+                              errorMsg.includes('ERR_');
+        
+        const isServerError = errorMsg.includes('500') ||
+                             errorMsg.includes('502') ||
+                             errorMsg.includes('503') ||
+                             errorMsg.includes('429') ||
+                             errorMsg.includes('Lua Execution Error'); // Lua errors podem ser temporários em alguns casos
+        
+        const isRetryable = isNetworkError || (isServerError && !isJsonError && !isValidationError);
+        
+        // ===== RETRY LOGIC (apenas para erros temporários) =====
+        if (isRetryable && syncRetryAttempt < RETRY_CONFIG.maxAttempts) {
             // Incrementar ANTES de calcular o delay
             syncRetryAttempt++;
             const nextDelay = calculateRetryDelay(syncRetryAttempt - 1);
@@ -442,10 +466,11 @@ async function performSync() {
                 "🔄"
             );
             
-            console.warn("[Sync] Retry scheduled:", {
+            console.warn("[Sync] Retry scheduled (retryable error):", {
                 attempt: syncRetryAttempt,
                 delayMs: nextDelay,
-                error: errorMsg
+                error: errorMsg,
+                isRetryable
             });
             
             isSyncInProgress = false;
@@ -458,18 +483,21 @@ async function performSync() {
             return; // Não marcar como erro fatal ainda
         }
         
-        // ===== FINAL ERROR (todas as tentativas falharam) =====
-        addSyncLog(
-            `Falha após ${RETRY_CONFIG.maxAttempts} tentativas: ${errorMsg}`,
-            "error",
-            "⚠️"
-        );
+        // ===== FINAL ERROR (não-retryable ou max tentativas) =====
+        const finalMsg = !isRetryable ? 
+            `Erro não-recuperável: ${errorMsg}` :
+            `Falha após ${RETRY_CONFIG.maxAttempts} tentativas: ${errorMsg}`;
         
-        console.error("[Sync] Final error after all retries:", { 
+        addSyncLog(finalMsg, "error", "⚠️");
+        
+        console.error("[Sync] Final error:", { 
             message: errorMsg, 
             stack: error.stack,
             timestamp: new Date().toISOString(),
-            retries: syncRetryAttempt
+            retries: syncRetryAttempt,
+            isRetryable,
+            isJsonError,
+            isValidationError
         });
         
         syncRetryAttempt = 0; // Reset para próxima tentativa de sync normal
