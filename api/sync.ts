@@ -117,7 +117,7 @@ export default async function handler(req: Request) {
                 return new Response(JSON.stringify(conflictShards), { status: 409, headers: HEADERS_BASE });
             }
             
-            return new Response(JSON.stringify({ error: 'Lua Execution Error', code: result[1] || 'UNKNOWN', detail: result[2], detailType: result[3] }), { status: 400, headers: HEADERS_BASE });
+            return new Response(JSON.stringify({ error: 'Lua Execution Error', code: result[1] || 'UNKNOWN', detail: result[2], detailType: result[3], raw: result }), { status: 400, headers: HEADERS_BASE });
         }
 
         return new Response(null, { status: 405 });

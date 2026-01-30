@@ -322,7 +322,8 @@ async function performSync() {
             const errorData = await response.json().catch(() => ({} as any));
             const code = errorData.code ? ` [${errorData.code}]` : '';
             const detail = errorData.detail ? ` (${errorData.detail}${errorData.detailType ? `:${errorData.detailType}` : ''})` : '';
-            throw new Error((errorData.error || `Erro ${response.status}`) + code + detail);
+            const raw = errorData.raw ? ` raw=${JSON.stringify(errorData.raw)}` : '';
+            throw new Error((errorData.error || `Erro ${response.status}`) + code + detail + raw);
         }
     } catch (error: any) {
         addSyncLog(`Falha no envio: ${error.message}`, "error");
@@ -402,7 +403,8 @@ export async function downloadRemoteState(): Promise<AppState | undefined> {
         const errorData = await response.json().catch(() => ({} as any));
         const code = errorData.code ? ` [${errorData.code}]` : '';
         const detail = errorData.detail ? ` (${errorData.detail}${errorData.detailType ? `:${errorData.detailType}` : ''})` : '';
-        throw new Error((errorData.error || "Falha na conexão com a nuvem") + code + detail);
+        const raw = errorData.raw ? ` raw=${JSON.stringify(errorData.raw)}` : '';
+        throw new Error((errorData.error || "Falha na conexão com a nuvem") + code + detail + raw);
     }
     const shards = await response.json();
     if (!shards || Object.keys(shards).length === 0) { addSyncLog("Cofre vazio na nuvem.", "info"); return undefined; }
