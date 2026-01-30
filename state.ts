@@ -262,6 +262,15 @@ export function clearActiveHabitsCache() {
     state.activeHabitsCache.clear();
 }
 
+export function clearAllCaches() {
+    state.streaksCache.clear();
+    state.scheduleCache.clear();
+    state.activeHabitsCache.clear();
+    state.unarchivedCache.clear();
+    state.habitAppearanceCache.clear();
+    state.daySummaryCache.clear();
+}
+
 export function getHabitDailyInfoForDate(dateISO: string): Record<string, HabitDailyInfo> {
     if (!state.dailyData[dateISO]) {
         state.dailyData[dateISO] = {};
@@ -289,11 +298,16 @@ export function clearScheduleCache() {
     state.scheduleCache.clear();
 }
 
+function invalidateDateKeyInCacheMap<T>(cache: Map<string, Map<string, T>>, dateISO: string) {
+    cache.forEach((dateMap) => dateMap.delete(dateISO));
+}
+
 export function invalidateCachesForDateChange(dateISO: string, habitIds: string[]) {
     state.daySummaryCache.delete(dateISO);
-    state.streaksCache.forEach((cache) => cache.delete(dateISO));
-    state.habitAppearanceCache.forEach((cache) => cache.delete(dateISO));
-    state.scheduleCache.forEach((cache) => cache.delete(dateISO));
+    state.activeHabitsCache.delete(dateISO);
+    invalidateDateKeyInCacheMap(state.streaksCache, dateISO);
+    invalidateDateKeyInCacheMap(state.habitAppearanceCache, dateISO);
+    invalidateDateKeyInCacheMap(state.scheduleCache, dateISO);
 }
 
 export function isChartDataDirty(): boolean {

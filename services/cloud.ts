@@ -10,7 +10,7 @@
 
 import { AppState, state, getPersistableState } from '../state';
 import { loadState, persistStateLocally } from './persistence';
-import { pushToOneSignal, generateUUID } from '../utils';
+import { pushToOneSignal, generateUUID, createDebounced } from '../utils';
 import { ui } from '../render/ui';
 import { t } from '../i18n';
 import { hasLocalSyncKey, getSyncKey, apiFetch } from './api';
@@ -19,12 +19,15 @@ import { mergeStates } from './dataMerge';
 import { HabitService } from './HabitService';
 
 // PERFORMANCE: Debounce para evitar salvar na nuvem a cada pequena alteração
-let syncTimeout: number | null = null;
 const DEBOUNCE_DELAY = 2000; 
 const HASH_STORAGE_KEY = 'askesis_sync_hashes';
+const SYNC_LOG_MAX_ENTRIES = 50;
+const SYNC_LOG_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
+const HASH_CACHE_MAX_ENTRIES = 2000;
 
 let isSyncInProgress = false;
 let pendingSyncState: AppState | null = null;
+const debouncedSync = createDebounced(() => { if (!isSyncInProgress) performSync(); }, DEBOUNCE_DELAY);
 
 // --- WORKER INFRASTRUCTURE ---
 let syncWorker: Worker | null = null;
@@ -93,18 +96,34 @@ function splitIntoShards(appState: AppState): Record<string, any> {
 const lastSyncedHashes: Map<string, string> = (() => {
     try {
         const raw = localStorage.getItem(HASH_STORAGE_KEY);
-        if (raw) return new Map(JSON.parse(raw));
+        if (raw) {
+            const loaded = new Map(JSON.parse(raw));
+            return loaded;
+        }
     } catch (e) {
         console.warn("[Sync] Falha ao carregar cache de hashes", e);
     }
     return new Map();
 })();
 
+// Normaliza tamanho do cache após o load (evita crescimento indefinido no boot)
+pruneHashCache();
+
 function persistHashCache() {
     try {
+        pruneHashCache();
         localStorage.setItem(HASH_STORAGE_KEY, JSON.stringify(Array.from(lastSyncedHashes.entries())));
     } catch (e) {
         console.error("[Sync] Falha ao salvar cache de hashes", e);
+    }
+}
+
+function pruneHashCache() {
+    if (lastSyncedHashes.size <= HASH_CACHE_MAX_ENTRIES) return;
+    while (lastSyncedHashes.size > HASH_CACHE_MAX_ENTRIES) {
+        const firstKey = lastSyncedHashes.keys().next().value;
+        if (firstKey === undefined) break;
+        lastSyncedHashes.delete(firstKey);
     }
 }
 
@@ -144,8 +163,15 @@ function murmurHash3(key: string, seed: number = 0): string {
 export function addSyncLog(msg: string, type: 'success' | 'error' | 'info' = 'info', icon?: string) {
     if (!state.syncLogs) state.syncLogs = [];
     state.syncLogs.push({ time: Date.now(), msg, type, icon });
-    if (state.syncLogs.length > 50) state.syncLogs.shift();
+    pruneSyncLogs();
     console.debug(`[Sync Log] ${msg}`);
+}
+
+function pruneSyncLogs() {
+    if (!state.syncLogs || state.syncLogs.length === 0) return;
+    const cutoff = Date.now() - SYNC_LOG_MAX_AGE_MS;
+    while (state.syncLogs.length > SYNC_LOG_MAX_ENTRIES) state.syncLogs.shift();
+    while (state.syncLogs.length > 0 && state.syncLogs[0].time < cutoff) state.syncLogs.shift();
 }
 
 export function setSyncStatus(statusKey: 'syncSaving' | 'syncSynced' | 'syncError' | 'syncInitial') {
@@ -284,10 +310,13 @@ export function syncStateWithCloud(appState: AppState, immediate = false) {
     if (!hasLocalSyncKey()) return;
     pendingSyncState = appState; 
     setSyncStatus('syncSaving');
-    if (syncTimeout) clearTimeout(syncTimeout);
     if (isSyncInProgress) return;
-    if (immediate) performSync();
-    else syncTimeout = window.setTimeout(performSync, DEBOUNCE_DELAY);
+    if (immediate) {
+        debouncedSync.cancel();
+        performSync();
+    } else {
+        debouncedSync();
+    }
 }
 
 async function reconstructStateFromShards(shards: Record<string, string>): Promise<AppState | undefined> {

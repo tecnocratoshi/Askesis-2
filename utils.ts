@@ -27,6 +27,24 @@ declare global {
 
 export const MS_PER_DAY = 86400000;
 
+// --- TIMERS ---
+export type DebouncedFn = (() => void) & { cancel: () => void };
+
+export function createDebounced(fn: () => void, delayMs: number): DebouncedFn {
+    let timer: number | undefined;
+    const debounced = (() => {
+        if (timer !== undefined) clearTimeout(timer);
+        timer = window.setTimeout(fn, delayMs);
+    }) as DebouncedFn;
+    debounced.cancel = () => {
+        if (timer !== undefined) {
+            clearTimeout(timer);
+            timer = undefined;
+        }
+    };
+    return debounced;
+}
+
 // --- STATIC LOOKUP TABLES (HOT MEMORY) ---
 export const HEX_LUT: string[] = Array.from({ length: 256 }, (_, i) => i.toString(16).padStart(2, '0'));
 const PAD_LUT: string[] = Array.from({ length: 100 }, (_, i) => i < 10 ? '0' + i : String(i));

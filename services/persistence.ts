@@ -8,7 +8,7 @@
  * @description Camada de Persistência e Gerenciamento de Ciclo de Vida de Dados (Storage Engine).
  */
 
-import { state, AppState, Habit, HabitDailyInfo, APP_VERSION, getPersistableState } from '../state';
+import { state, AppState, Habit, HabitDailyInfo, APP_VERSION, getPersistableState, clearAllCaches } from '../state';
 import { migrateState } from './migration';
 import { HabitService } from './HabitService';
 import { clearHabitDomCache } from '../render';
@@ -246,8 +246,12 @@ export async function loadState(cloudState?: AppState): Promise<AppState | null>
         state.hasOnboarded = migrated.hasOnboarded ?? true;
         state.syncLogs = migrated.syncLogs || [];
 
+        if (state.syncLogs.length > 50) {
+            state.syncLogs = state.syncLogs.slice(-50);
+        }
+
         // Clear Caches
-        ['streaksCache', 'scheduleCache', 'activeHabitsCache', 'unarchivedCache', 'habitAppearanceCache', 'daySummaryCache'].forEach(k => (state as any)[k].clear());
+        clearAllCaches();
         
         clearHabitDomCache();
         Object.assign(state.uiDirtyState, { calendarVisuals: true, habitListStructure: true, chartData: true });

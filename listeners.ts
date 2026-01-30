@@ -16,7 +16,7 @@ import { setupDragHandler } from './listeners/drag';
 import { setupSwipeHandler } from './listeners/swipe';
 import { setupCalendarListeners } from './listeners/calendar';
 import { setupChartListeners } from './listeners/chart';
-import { pushToOneSignal, getTodayUTCIso, resetTodayCache } from './utils';
+import { pushToOneSignal, getTodayUTCIso, resetTodayCache, createDebounced } from './utils';
 import { state, getPersistableState } from './state';
 import { syncStateWithCloud } from './services/cloud';
 import { checkAndAnalyzeDayContext } from './services/analysis';
@@ -26,8 +26,8 @@ const PERMISSION_DELAY_MS = 500;
 const INTERACTION_DELAY_MS = 50;
 
 let areListenersAttached = false;
-let networkDebounceTimer: number | undefined;
 let visibilityRafId: number | null = null;
+let isHandlingVisibility = false;
 
 const _handlePermissionChange = () => {
     window.setTimeout(updateNotificationUI, PERMISSION_DELAY_MS);
@@ -38,36 +38,37 @@ const _handleOneSignalInit = (OneSignal: any) => {
     updateNotificationUI();
 };
 
-const _handleNetworkChange = () => {
-    if (networkDebounceTimer) clearTimeout(networkDebounceTimer);
-    networkDebounceTimer = window.setTimeout(() => {
-        const isOnline = navigator.onLine;
-        const wasOffline = document.body.classList.contains('is-offline');
-        document.body.classList.toggle('is-offline', !isOnline);
-        if (wasOffline === isOnline) renderAINotificationState();
-        if (isOnline) {
-            console.log("[Network] Online stable. Flushing pending sync.");
-            syncStateWithCloud(getPersistableState());
-        }
-    }, NETWORK_DEBOUNCE_MS);
-};
+const _handleNetworkChange = createDebounced(() => {
+    const isOnline = navigator.onLine;
+    const wasOffline = document.body.classList.contains('is-offline');
+    document.body.classList.toggle('is-offline', !isOnline);
+    if (wasOffline === isOnline) renderAINotificationState();
+    if (isOnline) {
+        console.log("[Network] Online stable. Flushing pending sync.");
+        syncStateWithCloud(getPersistableState());
+    }
+}, NETWORK_DEBOUNCE_MS);
 
 const _handleVisibilityChange = () => {
-    if (document.visibilityState === 'visible') {
-        _handleNetworkChange();
-        const cachedToday = getTodayUTCIso();
-        resetTodayCache();
-        const realToday = getTodayUTCIso();
-        if (cachedToday !== realToday) {
-            if (state.selectedDate === cachedToday) state.selectedDate = realToday;
-            document.dispatchEvent(new CustomEvent('dayChanged'));
-        } else {
-            if (visibilityRafId) cancelAnimationFrame(visibilityRafId);
-            visibilityRafId = requestAnimationFrame(() => {
-                renderApp();
-                visibilityRafId = null;
-            });
-        }
+    if (document.visibilityState !== 'visible') return;
+    if (isHandlingVisibility) return;
+    isHandlingVisibility = true;
+
+    _handleNetworkChange();
+    const cachedToday = getTodayUTCIso();
+    resetTodayCache();
+    const realToday = getTodayUTCIso();
+    if (cachedToday !== realToday) {
+        if (state.selectedDate === cachedToday) state.selectedDate = realToday;
+        document.dispatchEvent(new CustomEvent('dayChanged'));
+        isHandlingVisibility = false;
+    } else {
+        if (visibilityRafId) cancelAnimationFrame(visibilityRafId);
+        visibilityRafId = requestAnimationFrame(() => {
+            renderApp();
+            visibilityRafId = null;
+            isHandlingVisibility = false;
+        });
     }
 };
 

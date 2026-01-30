@@ -10,6 +10,23 @@
  */
 
 const SYNC_KEY_STORAGE_KEY = 'habitTrackerSyncKey';
+const API_TIMEOUT_MS = 12000;
+const API_MAX_RETRIES = 2;
+const API_RETRY_DELAY_MS = 500;
+
+function wait(ms: number): Promise<void> {
+    return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+async function fetchWithTimeout(input: RequestInfo | URL, init: RequestInit, timeoutMs: number): Promise<Response> {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+        return await fetch(input, { ...init, signal: controller.signal });
+    } finally {
+        clearTimeout(timeoutId);
+    }
+}
 
 // --- GERENCIAMENTO DE CHAVES ---
 
@@ -100,16 +117,35 @@ export async function apiFetch(endpoint: string, options: RequestInit = {}, incl
         keepalive: options.method === 'POST'
     };
 
-    const response = await fetch(endpoint, config);
+    let lastError: unknown;
+    for (let attempt = 0; attempt <= API_MAX_RETRIES; attempt++) {
+        try {
+            const response = await fetchWithTimeout(endpoint, config, API_TIMEOUT_MS);
 
-    // Gestão de Resiliência: Se o servidor diz que a chave não existe mais, limpa localmente
-    if (response.status === 401 && hasLocalSyncKey()) {
-        console.error("[API] Unauthorized. Local key might be revoked.");
+            // Gestão de Resiliência: Se o servidor diz que a chave não existe mais, limpa localmente
+            if (response.status === 401 && hasLocalSyncKey()) {
+                console.error("[API] Unauthorized. Local key might be revoked.");
+            }
+
+            return response;
+        } catch (error) {
+            lastError = error;
+            if (attempt < API_MAX_RETRIES) {
+                await wait(API_RETRY_DELAY_MS * (attempt + 1));
+                continue;
+            }
+            console.error('[API] Network error during apiFetch', error);
+        }
     }
 
-    return response;
+    throw lastError;
 }
 
 export const initAuth = async () => {
-    // Hooks de inicialização de autenticação se necessário
+    if (!hasLocalSyncKey()) return;
+    try {
+        await getSyncKeyHash();
+    } catch (error) {
+        console.warn('[API] initAuth failed', error);
+    }
 };
