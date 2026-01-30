@@ -125,6 +125,7 @@ const _updateVisuals = () => {
     if (SwipeState.hasTypedOM && SwipeState.content.attributeStyleMap) {
         SwipeState.content.attributeStyleMap.set('transform', new (window as any).CSSTranslate(CSS.px(tx), CSS.px(0)));
     } else {
+        if (SwipeState.content) SwipeState.content.style.transition = 'none';
         SwipeState.content.style.transform = `translateX(${tx}px)`;
     }
 
@@ -146,7 +147,9 @@ const _reset = () => {
             content.draggable = true;
         }
     }
+    SwipeState.origTransition = null;
     document.body.classList.remove('is-interaction-active');
+    document.body.classList.remove('is-swiping-active');
     if (state.uiDirtyState.habitListStructure) requestAnimationFrame(() => renderApp());
     
     window.removeEventListener('pointermove', _handlePointerMove);
@@ -175,6 +178,7 @@ const _handlePointerMove = (e: PointerEvent) => {
                 SwipeState.startX = SwipeState.currentX;
                 SwipeState.isActive = 1;
                 document.body.classList.add('is-interaction-active');
+                document.body.classList.add('is-swiping-active');
                 SwipeState.card.classList.add(CSS_CLASSES.IS_SWIPING);
                 if (SwipeState.content) SwipeState.content.draggable = false;
                 try { SwipeState.card.setPointerCapture(e.pointerId); SwipeState.pointerId = e.pointerId; } catch(e) {}
@@ -241,6 +245,7 @@ export function setupSwipeHandler(container: HTMLElement) {
         cw.style.transition = 'none';
         cw.draggable = false;
         document.body.classList.add('is-interaction-active');
+        document.body.classList.add('is-swiping-active');
 
         window.addEventListener('pointermove', _handlePointerMove, { passive: false });
         window.addEventListener('pointerup', _handlePointerUp);
