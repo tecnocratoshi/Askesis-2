@@ -25,16 +25,16 @@ export async function checkAndAnalyzeDayContext(dateISO: string) {
     }
 
     const task = async () => {
-        let notes = ''; 
-        const day = getHabitDailyInfoForDate(dateISO);
-        Object.keys(day).forEach(id => Object.keys(day[id].instances).forEach(t => { 
-            const n = day[id].instances[t as TimeOfDay]?.note; 
-            if (n) notes += `- ${n}\n`; 
-        }));
-        
-        if (!notes.trim() || !navigator.onLine) return;
-        
         try {
+            let notes = ''; 
+            const day = getHabitDailyInfoForDate(dateISO);
+            Object.keys(day).forEach(id => Object.keys(day[id].instances).forEach(t => { 
+                const n = day[id].instances[t as TimeOfDay]?.note; 
+                if (n) notes += `- ${n}\n`; 
+            }));
+            
+            if (!notes.trim() || !navigator.onLine) return;
+
             const promptPayload = { 
                 notes, 
                 themeList: t('aiThemeList'), 
@@ -51,6 +51,10 @@ export async function checkAndAnalyzeDayContext(dateISO: string) {
                 method: 'POST', 
                 body: JSON.stringify({ prompt, systemInstruction }) 
             });
+
+            if (!res.ok) {
+                throw new Error(`Analyze request failed (${res.status})`);
+            }
             
             const rawText = await res.text();
             const jsonStr = rawText.replace(/```json|```/g, '').trim();

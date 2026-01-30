@@ -6,7 +6,7 @@
 
 /**
  * @file cloud.ts
- * @description Shim de compatibilidade. Use `services/cloud.ts`.
+ * @description Arquivo legado mantido vazio para evitar shims redundantes.
  */
 
-export * from './services/cloud';
+export {};

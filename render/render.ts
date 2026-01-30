@@ -5,47 +5,10 @@
 
 /**
  * @file render.ts
- * @description Orquestrador de Renderização (View Orchestrator / Facade).
+ * @description Shim de compatibilidade. Use o renderizador da raiz.
  */
 
-import { state, LANGUAGES } from './state';
-import { parseUTCIsoDate, toUTCIsoDateString, addDays, pushToOneSignal, getTodayUTCIso } from './utils';
-import { ui } from './render/ui';
-import { t, setLanguage, formatDate } from './i18n'; 
-import { UI_ICONS } from './render/icons';
-import type { Quote } from './data/quotes';
-import { checkAndAnalyzeDayContext } from './habitActions';
-import { selectBestQuote } from './services/quoteEngine';
-import { calculateDaySummary } from './services/selectors';
-
-import { setTextContent, updateReelRotaryARIA } from './render/dom';
-import { renderCalendar, renderFullCalendar } from './render/calendar';
-import { renderHabits } from './render/habits';
-import { renderChart } from './render/chart';
-import { setupManageModal, refreshEditModalUI, renderLanguageFilter, renderIconPicker, renderFrequencyOptions } from './render/modals';
-
-export * from './render/dom';
-export * from './render/calendar';
-export * from './render/habits';
-export * from './render/modals';
-export * from './render/chart';
-
-// EXPORT FIX: Garante que funções de limpeza e atualização cirúrgica estejam disponíveis
-export { clearHabitDomCache } from './render/habits';
-export { updateDayVisuals } from './render/calendar';
-
-let _lastTitleDate: string | null = null;
-let _lastTitleLang: string | null = null;
-let _cachedQuoteState: { id: string, contextKey: string } | null = null;
-
-let stoicQuotesModule: { STOIC_QUOTES: readonly Quote[] } | null = null;
-let _quotesImportPromise: Promise<typeof import('../data/quotes')> | null = null;
-
-let _cachedRefToday: string | null = null;
-let _renderTaskController: AbortController | null = null;
-let _rafHandle: number | null = null;
-
-const OPTS_HEADER_ARIA: Intl.DateTimeFormatOptions = { weekday: 'long', month: 'long', day: 'numeric', timeZone: 'UTC' };
+export * from '../render';
 
 /**
  * Atualiza o título do cabeçalho com lógica simplificada.

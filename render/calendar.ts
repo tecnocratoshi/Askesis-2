@@ -11,7 +11,7 @@
 import { state } from '../state';
 import { calculateDaySummary } from '../services/selectors';
 import { ui } from './ui';
-import { getTodayUTCIso, toUTCIsoDateString, parseUTCIsoDate, addDays } from '../utils';
+import { getTodayUTCIso, toUTCIsoDateString, parseUTCIsoDate, addDays, pad2 } from '../utils';
 import { formatInteger, getLocaleDayName } from '../i18n'; 
 import { setTextContent } from './dom';
 import { CSS_CLASSES } from './constants';
@@ -24,7 +24,6 @@ let dayItemTemplate: HTMLElement | null = null;
 let fullCalendarDayTemplate: HTMLElement | null = null;
 
 const OPTS_ARIA = { weekday: 'long', day: 'numeric', month: 'long', timeZone: 'UTC' } as const;
-const PAD = Array.from({length: 100}, (_, i) => (i < 10 ? '0' : '') + i);
 
 // --- TEMPLATES (Lazy Init) ---
 
@@ -217,10 +216,10 @@ export function renderFullCalendar() {
 
     // Dias do mês atual
     const todayISO = getTodayUTCIso();
-    const prefix = `${year}-${PAD[month + 1]}-`;
+    const prefix = `${year}-${pad2(month + 1)}-`;
 
     for (let i = 1; i <= daysInMonth; i++) {
-        const iso = prefix + PAD[i];
+        const iso = prefix + pad2(i);
         const el = getFullCalendarDayTemplate().cloneNode(true) as HTMLElement;
         const ring = el.firstElementChild as HTMLElement;
         const num = ring.firstElementChild as HTMLElement;

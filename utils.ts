@@ -8,23 +8,6 @@
  * @description Biblioteca de Utilitários de Infraestrutura (Clean & Native).
  */
 
-declare global {
-    interface Element {
-        attributeStyleMap?: {
-            set(property: string, value: any): void;
-            get(property: string): any;
-            clear(): void;
-        };
-    }
-    interface Window {
-        OneSignal?: any[];
-        OneSignalDeferred?: any[];
-        scheduler?: {
-            postTask<T>(callback: () => T | Promise<T>, options?: { priority?: 'user-blocking' | 'user-visible' | 'background'; signal?: AbortSignal; delay?: number }): Promise<T>;
-        };
-    }
-}
-
 export const MS_PER_DAY = 86400000;
 
 // --- TIMERS ---
@@ -48,6 +31,10 @@ export function createDebounced(fn: () => void, delayMs: number): DebouncedFn {
 // --- STATIC LOOKUP TABLES (HOT MEMORY) ---
 export const HEX_LUT: string[] = Array.from({ length: 256 }, (_, i) => i.toString(16).padStart(2, '0'));
 const PAD_LUT: string[] = Array.from({ length: 100 }, (_, i) => i < 10 ? '0' + i : String(i));
+
+export function pad2(value: number): string {
+    return PAD_LUT[value] ?? String(value).padStart(2, '0');
+}
 
 // --- BASE64 HELPERS (Safe Chunking) ---
 export function arrayBufferToBase64(buffer: ArrayBuffer): string {

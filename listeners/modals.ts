@@ -98,7 +98,7 @@ function _validateAndFeedback(newName: string): boolean {
 
     if (isBlockingError) {
         errorKey = 'noticeNameCannotBeEmpty';
-    } else if (trimmedName.length > 16) {
+    } else if (trimmedName.length > MAX_HABIT_NAME_LENGTH) {
         errorKey = 'noticeNameTooLong'; // Apenas um aviso não-bloqueante
     }
 

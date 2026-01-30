@@ -24,6 +24,7 @@ const HASH_STORAGE_KEY = 'askesis_sync_hashes';
 const SYNC_LOG_MAX_ENTRIES = 50;
 const SYNC_LOG_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 const HASH_CACHE_MAX_ENTRIES = 2000;
+const WORKER_TIMEOUT_MS = 15000;
 
 let isSyncInProgress = false;
 let pendingSyncState: AppState | null = null;
@@ -51,6 +52,9 @@ function getWorker(): Worker {
         
         syncWorker.onerror = (e) => {
             logger.error("Critical Worker Error:", e);
+            workerCallbacks.forEach(({ reject }) => reject(new Error('Worker crashed')));
+            workerCallbacks.clear();
+            syncWorker = null;
         };
     }
     return syncWorker;
@@ -59,7 +63,14 @@ function getWorker(): Worker {
 export function runWorkerTask<T>(type: 'encrypt' | 'decrypt' | 'build-ai-prompt' | 'build-quote-analysis-prompt' | 'prune-habit' | 'archive', payload: any, key?: string): Promise<T> {
     return new Promise((resolve, reject) => {
         const id = generateUUID();
-        workerCallbacks.set(id, { resolve, reject });
+        const timeoutId = window.setTimeout(() => {
+            workerCallbacks.delete(id);
+            reject(new Error('Worker timeout'));
+        }, WORKER_TIMEOUT_MS);
+        workerCallbacks.set(id, { 
+            resolve: (val) => { clearTimeout(timeoutId); resolve(val); }, 
+            reject: (err) => { clearTimeout(timeoutId); reject(err); } 
+        });
         getWorker().postMessage({ id, type, payload, key });
     });
 }
@@ -170,8 +181,8 @@ export function addSyncLog(msg: string, type: 'success' | 'error' | 'info' = 'in
 function pruneSyncLogs() {
     if (!state.syncLogs || state.syncLogs.length === 0) return;
     const cutoff = Date.now() - SYNC_LOG_MAX_AGE_MS;
-    while (state.syncLogs.length > SYNC_LOG_MAX_ENTRIES) state.syncLogs.shift();
     while (state.syncLogs.length > 0 && state.syncLogs[0].time < cutoff) state.syncLogs.shift();
+    while (state.syncLogs.length > SYNC_LOG_MAX_ENTRIES) state.syncLogs.shift();
 }
 
 export function setSyncStatus(statusKey: 'syncSaving' | 'syncSynced' | 'syncError' | 'syncInitial') {
@@ -212,16 +223,24 @@ async function resolveConflictWithServerState(serverShards: Record<string, strin
             lastModified: parseInt(serverShards.lastModified || '0', 10),
             habits: remoteShards['core']?.habits || [],
             dailyData: remoteShards['core']?.dailyData || {},
+            dailyDiagnoses: remoteShards['core']?.dailyDiagnoses || {},
             archives: {},
             monthlyLogs: new Map(),
             notificationsShown: remoteShards['core']?.notificationsShown || [],
-            hasOnboarded: remoteShards['core']?.hasOnboarded ?? true
+            hasOnboarded: remoteShards['core']?.hasOnboarded ?? true,
+            quoteState: remoteShards['core']?.quoteState
         };
 
         for (const key in remoteShards) {
             if (key.startsWith('archive:')) { remoteState.archives[key.replace('archive:', '')] = remoteShards[key]; }
             if (key.startsWith('logs:')) { 
-                remoteShards[key].forEach(([k, v]: [string, string]) => remoteState.monthlyLogs.set(k, BigInt(v))); 
+                remoteShards[key].forEach(([k, v]: [string, string]) => {
+                    try {
+                        remoteState.monthlyLogs.set(k, BigInt(v));
+                    } catch (e) {
+                        logger.warn(`[Sync] Invalid log value for ${k}, skipping.`, e);
+                    }
+                }); 
             }
         }
 
@@ -341,6 +360,7 @@ async function reconstructStateFromShards(shards: Record<string, string>): Promi
             lastModified: parseInt(shards.lastModified || '0', 10),
             habits: decryptedShards['core']?.habits || [],
             dailyData: decryptedShards['core']?.dailyData || {},
+            dailyDiagnoses: decryptedShards['core']?.dailyDiagnoses || {},
             archives: {},
             monthlyLogs: new Map(),
             notificationsShown: decryptedShards['core']?.notificationsShown || [],
@@ -350,7 +370,13 @@ async function reconstructStateFromShards(shards: Record<string, string>): Promi
         for (const key in decryptedShards) {
             if (key.startsWith('archive:')) { result.archives[key.replace('archive:', '')] = decryptedShards[key]; }
             if (key.startsWith('logs:')) { 
-                decryptedShards[key].forEach(([k, v]: [string, string]) => result.monthlyLogs.set(k, BigInt(v))); 
+                decryptedShards[key].forEach(([k, v]: [string, string]) => {
+                    try {
+                        result.monthlyLogs.set(k, BigInt(v));
+                    } catch (e) {
+                        logger.warn(`[Sync] Invalid log value for ${k}, skipping.`, e);
+                    }
+                }); 
             }
         }
         return result;

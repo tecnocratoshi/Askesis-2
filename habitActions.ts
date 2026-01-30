@@ -5,7 +5,7 @@
 
 /**
  * @file habitActions.ts
- * @description Shim de compatibilidade. Use `services/habitActions.ts`.
+ * @description Arquivo legado mantido vazio para evitar shims redundantes.
  */
 
-export * from './services/habitActions';
+export {};

@@ -48,8 +48,7 @@ function hydrateLogs(appState: AppState) {
             
         const map = new Map<string, bigint>();
         entries.forEach((item: any) => {
-            const key = Array.isArray(item) ? item[0] : item[0];
-            const val = Array.isArray(item) ? item[1] : item[1];
+            const [key, val] = item as [string, any];
             
             try {
                 if (val && typeof val === 'object' && val.__type === 'bigint') {
@@ -120,8 +119,7 @@ function mergeDayRecord(source: Record<string, HabitDailyInfo>, target: Record<s
 }
 
 export async function mergeStates(local: AppState, incoming: AppState): Promise<AppState> {
-    hydrateLogs(local);
-    hydrateLogs(incoming);
+    [local, incoming].forEach(hydrateLogs);
 
     const localTs = local.lastModified || 0;
     const incomingTs = incoming.lastModified || 0;

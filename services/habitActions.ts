@@ -304,6 +304,7 @@ export async function performAIAnalysis(type: 'monthly' | 'quarterly' | 'histori
         const { prompt, systemInstruction } = await runWorkerTask<any>('build-ai-prompt', { analysisType: type, habits: state.habits, dailyData: state.dailyData, archives: state.archives, monthlyLogsSerialized: logsSerialized, languageName: getAiLanguageName(), translations: trans, todayISO: getTodayUTCIso() });
         if (id !== state.aiReqId) return;
         const res = await apiFetch('/api/analyze', { method: 'POST', body: JSON.stringify({ prompt, systemInstruction }) });
+        if (!res.ok) throw new Error(`AI request failed (${res.status})`);
         if (id === state.aiReqId) { state.lastAIResult = await res.text(); state.aiState = 'completed'; addSyncLog("Análise IA concluída.", 'success', '✨'); }
     } catch (e) { if (id === state.aiReqId) { state.lastAIError = String(e); state.aiState = 'error'; state.lastAIResult = t('aiErrorGeneric'); addSyncLog("Erro na análise IA.", 'error', '❌'); } } finally { if (id === state.aiReqId) { saveState(); renderAINotificationState(); } }
 }
