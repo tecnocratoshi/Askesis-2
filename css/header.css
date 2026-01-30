@@ -23,7 +23,7 @@
 .header-top {
     display: flex;
     align-items: flex-end; /* ALIGNMENT FIX [2025-06-03]: Bottom alignment for Calendar & AI Icon */
-    gap: var(--space-lg);
+    gap: calc(var(--space-lg) / 2);
 }
 
 /* ALIGNMENT FIX [2025-06-03]: Lifter para o FAB.
