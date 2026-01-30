@@ -231,6 +231,11 @@ export function setupSwipeHandler(container: HTMLElement) {
         SwipeState.wasOpenRight = card.classList.contains(CSS_CLASSES.IS_OPEN_RIGHT) ? 1 : 0;
         SwipeState.hasHaptics = 0;
 
+        // Preparar para swipe imediato: desativa drag e transições desde o início
+        card.classList.add(CSS_CLASSES.IS_SWIPING);
+        cw.draggable = false;
+        document.body.classList.add('is-interaction-active');
+
         window.addEventListener('pointermove', _handlePointerMove, { passive: false });
         window.addEventListener('pointerup', _handlePointerUp);
         window.addEventListener('pointercancel', _reset);
