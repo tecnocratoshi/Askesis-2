@@ -158,7 +158,16 @@ export default async function handler(req: Request) {
             if (result[0] === 'OK') return new Response('{"success":true}', { status: 200, headers: HEADERS_BASE });
 
             if (typeof result[0] === 'number') {
-                return new Response(JSON.stringify({ error: 'Lua Execution Error', code: 'LUA_NUMERIC_RETURN', detail: String(result[0]), raw: result }), { status: 400, headers: HEADERS_BASE });
+                const fallback = await applyShardsNonLua(kv, dataKey, lastModifiedNum, shards);
+                if (fallback.type === 'ok') {
+                    return new Response('{"success":true,"fallback":true}', { status: 200, headers: HEADERS_BASE });
+                }
+                const rawList = fallback.data as string[];
+                const conflictShards: Record<string, string> = {};
+                for (let i = 0; i < rawList.length; i += 2) {
+                    conflictShards[rawList[i]] = rawList[i+1];
+                }
+                return new Response(JSON.stringify(conflictShards), { status: 409, headers: HEADERS_BASE });
             }
             
             if (result[0] === 'CONFLICT') {
