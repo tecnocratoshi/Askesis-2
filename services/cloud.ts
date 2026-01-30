@@ -313,6 +313,12 @@ async function performSync() {
             clearSyncHashCache();
             await resolveConflictWithServerState(await response.json());
         } else if (response.ok) {
+            try {
+                const payload = await response.json();
+                if (payload?.fallback) {
+                    addSyncLog("Fallback sem Lua aplicado.", "info");
+                }
+            } catch {}
             addSyncLog("Nuvem atualizada.", "success");
             setSyncStatus('syncSynced');
             pendingHashUpdates.forEach((hash, shard) => lastSyncedHashes.set(shard, hash));
