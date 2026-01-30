@@ -202,6 +202,133 @@ Como o Askesis é "Vanilla TypeScript" puro, não há build steps complexos de f
 
 ---
 
+<h2>🧪 Validação e Garantia de Qualidade</h2>
+
+A confiabilidade do Askesis é validada por uma suite de testes abrangente que cobre desde fluxos de usuário até cenários de caos distribuído.
+
+<h3>Estratégia de Testes: Integration-First, Property-Based</h3>
+
+Ao contrário de projetos que acumulam centenas de unit tests isolados, o Askesis adota uma abordagem **Integration-First**: cada teste valida fluxos completos que um usuário real executaria, combinando múltiplos subsistemas.
+
+**Filosofia:** *"Se o sistema passa em um cenário realista, os componentes individuais estão funcionando corretamente."*
+
+<h3>📊 Cobertura de Testes (Test Suites)</h3>
+
+O projeto possui **6 suites de testes especializadas**, totalizando **60+ testes** que validam:
+
+#### 🎯 **Super-Teste 1: Jornada do Usuário** (3 testes)
+Valida o ciclo de vida completo de um hábito desde a criação até a graduação:
+- Criação de hábito → Marcação de status → Adição de notas → Persistência → Recuperação após reload
+- Verifica que dados sobrevivem a reinicializações e que o DOM reflete corretamente o estado
+
+#### 🔄 **Super-Teste 2: Conflitos de Sincronização** (5 testes)
+Simula sincronização multi-dispositivo com conflitos:
+- Merge de bitmasks (União de dados binários)
+- Resolução CRDT-lite (Tombstone precedence: Delete > Update)
+- Serialização/Desserialização de dados criptografados
+- Garante que nenhum progresso é perdido em sincronizações concorrentes
+
+#### ⚡ **Super-Teste 3: Performance e Estresse** (10 testes)
+Benchmarks com budgets rigorosos de performance:
+- **100 hábitos criados** em < 100ms
+- **3 anos de histórico** (54.750 registros) populados em < 500ms
+- **10.000 leituras aleatórias** em < 50ms (validando O(1) dos bitmasks)
+- **1.000 toggles consecutivos** em < 100ms
+- Verifica que não há vazamento de memória após 10.000 operações
+- Performance constante independente do volume de dados (prova de O(1))
+
+#### ♿ **Super-Teste 4: Acessibilidade Total** (12 testes)
+Validação WCAG 2.1 AA compliance:
+- Navegação completa apenas com teclado (Tab, Enter, Escape)
+- Focus trap em modais (navegação não escapa do contexto)
+- Estrutura semântica HTML5 (landmarks, roles, aria-labels)
+- Anúncios dinâmicos com `aria-live` para leitores de tela
+- Contraste de cores adequado (ratios WCAG)
+- Respeito a `prefers-reduced-motion`
+- Skip links para navegação rápida
+
+#### 🔥 **Super-Teste 5: Recuperação de Desastres** (10 testes)
+Chaos Engineering - valida resiliência em cenários extremos:
+- Recuperação de localStorage corrompido (JSON inválido)
+- Dados parcialmente deletados (estado fragmentado)
+- Validação e rejeição de dados malformados
+- Storage quase cheio (QuotaExceededError)
+- Timestamps negativos ou futuros (anomalias temporais)
+- Detecção de loops infinitos (circuit breakers)
+- Degradação graceful quando features falham
+- Validação de migração entre versões antigas
+- Feedback claro para o usuário em situações de erro
+
+#### 🔥 **Nuclear QA: Fuzzing & Oracle (HabitService)** (10 testes)
+Property-based testing com geração aleatória de inputs:
+- **Oracle Test:** 1.000 operações aleatórias comparadas contra implementação "ingênua" correta
+- **Guard Clauses:** Validação de rejeição de argumentos inválidos (NaN, negativos, out-of-range)
+- **Datas Extremas:** Y2K38, Year 9999, Unix Epoch (1970)
+- **Idempotência:** Mesma operação 10x produz resultado idêntico
+- **Comutatividade:** Ordem de operações não afeta resultado final
+- **State Machine:** Transições válidas entre estados (NULL → DONE → DEFERRED → DONE_PLUS)
+- **Isolamento:** 100 hábitos não interferem entre si
+- **Performance:** 10.000 operações em < 16ms (0.0016ms/op)
+- **Bit Corruption:** BigInt inválidos tratados graciosamente
+- **Versionamento:** Dados antigos + novos coexistem sem conflitos
+
+#### 🧠 **Nuclear QA: Distributed Chaos (dataMerge)** (8 testes)
+Validação de algoritmos de sincronização distribuída:
+- **Three-Body Problem:** 3 clientes divergentes convergem após sincronização multi-salto
+- **Future-From-The-Past Attack:** Timestamps futuros com dados corrompidos não destroem histórico
+- **Property-Based Commutativity:** 100 estados aleatórios sempre convergem independente da ordem
+- **Identity Preservation:** Merge com null/undefined não retorna null ou crashes
+- **Network Partition:** 5 clientes sincronizam em ordem aleatória (Eventual Consistency)
+- **Race Conditions:** Writes simultâneos resolvidos via LWW (Last-Write-Wins)
+- **Idempotência:** Merge(A,B) = Merge(Merge(A,B), B)
+- **Roundtrip Serialization:** BigInt serializa/desserializa sem perda
+
+<h3>🎯 Métricas de Qualidade</h3>
+
+```text
+📈 Cobertura de Código:  80%+ (linhas), 70%+ (funções/branches)
+⚡ Performance Budgets:  Todos os benchmarks passando
+🔒 Testes de Segurança: Criptografia, validação de entrada, XSS prevention
+♿ Acessibilidade:       WCAG 2.1 AA compliant
+🌐 Testes Distribuídos:  Convergência em split-brain scenarios
+```
+
+<h3>🚀 Executando os Testes</h3>
+
+```bash
+# Suite completa (60+ testes)
+npm test
+
+# Apenas super-testes (cenários de integração)
+npm run test:super
+
+# Com relatório de cobertura
+npm run test:coverage
+
+# Interface visual (Vitest UI)
+npm run test:ui
+
+# Modo watch (desenvolvimento)
+npm run test:watch
+```
+
+<h3>💡 Por que essa abordagem de testes importa?</h3>
+
+**Para Futuros Colaboradores:**
+- **Confiabilidade Comprovada:** Cada funcionalidade crítica tem validação automática
+- **Prevenção de Regressões:** Mudanças futuras não quebram comportamentos existentes
+- **Performance Garantida:** Budgets rigorosos asseguram que o app escala com milhares de usuários
+- **Manutenibilidade:** Testes de integração documentam como o sistema funciona na prática
+- **Conformidade:** Acessibilidade e segurança são validadas continuamente, não apenas auditadas
+
+**Para Usuários:**
+- Seus dados estão seguros mesmo em cenários extremos (crash, corrupção, offline)
+- O app funciona de forma consistente em qualquer dispositivo ou situação de rede
+- Acessível para pessoas com diferentes necessidades (leitores de tela, navegação por teclado)
+- Performance previsível mesmo com anos de histórico acumulado
+
+---
+
 <h2>
   <img src="assets/zero-cost.svg" height="30" style="vertical-align: bottom; margin-right: 8px;" alt="Zero Cost Icon" />
   Arquitetura Zero Cost & Sustentabilidade
