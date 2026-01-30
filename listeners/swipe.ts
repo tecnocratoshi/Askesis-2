@@ -37,7 +37,8 @@ const SwipeState = {
     wasOpenLeft: 0, wasOpenRight: 0, actionWidth: 60, pointerId: -1,
     rafId: 0, hasHaptics: 0, card: null as HTMLElement | null,
     content: null as HTMLElement | null, hasTypedOM: false,
-    overshootStep: 0
+    overshootStep: 0,
+    origTransition: '' as string | null
 };
 
 export const isCurrentlySwiping = () => SwipeState.isActive === 1;
@@ -137,6 +138,9 @@ const _reset = () => {
         if (pointerId !== -1) try { card.releasePointerCapture(pointerId); } catch(e){}
         card.classList.remove(CSS_CLASSES.IS_SWIPING);
         if (content) {
+            if (SwipeState.origTransition !== null) {
+                content.style.transition = SwipeState.origTransition;
+            }
             if (SwipeState.hasTypedOM && content.attributeStyleMap) content.attributeStyleMap.clear();
             else content.style.transform = '';
             content.draggable = true;
@@ -233,6 +237,8 @@ export function setupSwipeHandler(container: HTMLElement) {
 
         // Preparar para swipe imediato: desativa drag e transições desde o início
         card.classList.add(CSS_CLASSES.IS_SWIPING);
+        SwipeState.origTransition = cw.style.transition;
+        cw.style.transition = 'none';
         cw.draggable = false;
         document.body.classList.add('is-interaction-active');
 
