@@ -44,7 +44,41 @@ A maioria dos apps de hábitos foca em gamificação superficial ou em "não que
 A criação do Askesis nasceu de duas necessidades pessoais fundamentais que não encontrei em outras soluções de mercado:
 
 1.  **Soberania e Privacidade de Dados:** O registro de hábitos é, por natureza, um diário íntimo da vida pessoal. Eu precisava de uma garantia absoluta de que essas informações não seriam compartilhadas, vendidas ou analisadas por terceiros. No Askesis, a prioridade é o controle da informação: os dados pertencem exclusivamente ao usuário e residem no seu dispositivo (ou no seu cofre pessoal criptografado).
+
+  Além disso, o Askesis adota uma prática conhecida como **anonimato coletivo** (*anonymity set*). Como o app não exige e-mail, telefone ou qualquer identificador pessoal, e utiliza uma **API de IA compartilhada** para todos, a identidade do usuário não apenas é criptografada — ela também é **diluída no conjunto de usuários**. Em outras palavras: as requisições são indistinguíveis entre si, reduzindo a chance de correlação individual. 
+
+  *Resumo:* **Privacidade por desenho + criptografia + anonimato coletivo** = um nível adicional de segurança para um app popular, anônimo e livre.
 2.  **Autonomia Tecnológica:** Em uma era dominada por modelos de assinatura (SaaS), recusei-me a pagar aluguel mensal por um software que poderia ser construído com a tecnologia web moderna disponível. Este projeto é a prova de que é possível ter uma ferramenta profissional, robusta e gratuita, utilizando os recursos que a tecnologia atual nos oferece, sem barreiras financeiras para o auto-aperfeiçoamento.
+
+---
+
+<h2>💝 Apoie o Desenvolvimento</h2>
+
+Se o Askesis está ajudando você a fortalecer sua vontade e consistência, considere apoiar o desenvolvimento:
+
+- **[GitHub Sponsors](https://github.com/sponsors/farifran)** - Patrocínio recorrente com recompensas exclusivas
+- **[Buy Me a Coffee](https://www.buymeacoffee.com/askesis)** - Contribuição única
+- **[Ko-fi](https://ko-fi.com/askesis)** - Alternativa global
+
+Todo apoio financia:
+- 🧪 Testes abrangentes e qualidade de código
+- 📚 Documentação detalhada e guias
+- 🚀 Novas funcionalidades e melhorias
+- 🔐 Auditorias de segurança e privacidade
+- ♿ Acessibilidade e suporte multilíngue
+
+### Por que importa?
+
+Atualmente, graças a plataformas gratuitas (Vercel, Google Gemini, OneSignal), o Askesis pode servir até **500 usuários simultaneamente**. Cada contribuição permite expandir esses limites:
+
+- Ativar APIs pagas do Google Gemini → suportar **+1000 análises diárias**
+- Aumentar quotas de sincronização → suportar **+5000 usuários**
+- Implementar CDN global → reduzir latência em regiões distantes
+- Manter infraestrutura 24/7 → garantir confiabilidade
+
+**O apoio transforma Askesis de um experimento em um serviço público sustentável.**
+
+**Obrigado por acreditar em um futuro onde a tecnologia serve à virtude, não o contrário.**
 
 ---
 
@@ -200,6 +234,8 @@ Como o Askesis é "Vanilla TypeScript" puro, não há build steps complexos de f
     ```
     *O projeto utiliza `esbuild` para Hot Module Replacement (HMR) e transpilação TS -> JS.*
 
+> **Nota importante sobre instância própria:** rodar uma versão auto-hospedada é totalmente possível, porém **reduz um dos maiores benefícios do Askesis: o anonimato coletivo**. Ao sair do conjunto de usuários compartilhado, você diminui o *anonymity set* que ajuda a diluir a identidade entre participantes.
+
 ---
 
 <h2>🧪 Validação e Garantia de Qualidade</h2>
@@ -339,6 +375,90 @@ Este projeto foi desenhado com uma engenharia inteligente para operar com **Cust
 *   **Armazenamento Ultraleve (GZIP):** Os dados históricos ("Cold Storage") são comprimidos via GZIP Stream API antes de serem salvos ou enviados para a nuvem. Isso reduz drasticamente o uso de banda e armazenamento.
 *   **O Celular Trabalha:** A maior parte do "pensamento" (criptografia, geração de gráficos, cálculos) é feita pelo seu próprio dispositivo, não pelo servidor. Isso poupa recursos da nuvem, garantindo que nunca ultrapassemos os limites gratuitos.
 *   **Notificações Gratuitas:** Utilizamos o plano de comunidade do OneSignal, que permite até 10.000 usuários Web gratuitamente.
+
+<h3>📊 Estimativas de Capacidade (com base em limites gratuitos)</h3>
+
+> **Nota:** os limites variam ao longo do tempo. Use as fórmulas abaixo e substitua pelos números atuais de cada provedor.
+
+**1) Google Gemini (IA compartilhada)**
+
+**Fórmula:**
+```
+usuarios_suportados ≈ (limite_req_dia / (req_por_usuario_dia))
+```
+
+**Exemplo (ajuste com a sua realidade):**
+- Se a quota permitir **Q** requisições/dia
+- E cada usuário fizer em média **R** consultas/dia
+→ Usuários suportados ≈ **Q / R**
+
+**Estimativa real (modelo Flash):**
+- **Quota estimada:** 1.000 solicitações/dia
+- **Uso médio por usuário:** 2 solicitações/dia (1 análise automática + 1 conselho estoico)
+→ **Usuários suportados ≈ 1.000 / 2 = 500 usuários/dia**
+
+**Boas práticas para reduzir consumo:**
+- Cache de respostas para consultas repetidas
+- Limitar sugestões diárias por usuário (ex: 1–3 insights/dia)
+- Rodar análises locais sempre que possível
+
+**2) OneSignal (Notificações Web)**
+
+**Limite gratuito divulgado:** até **10.000 usuários Web (subscribers)**.
+
+**Estimativa de capacidade:**
+- Se cada usuário receber **N** notificações/dia
+→ Total de notificações/dia ≈ **10.000 × N**
+
+**Cenário do Askesis (atual):**
+- **2 notificações/dia** para completar hábitos + **1 mensagem estoica/dia**
+→ **N = 3 notificações/dia**
+
+> **Importante:** o limite gratuito é **por número de usuários/subscribers**, não por volume de envio. Ou seja, ao atingir **10.000 usuários**, você já alcança o teto do plano — independentemente do número de notificações enviadas.
+
+**3) Vercel (Banda/Edge Functions)**
+
+**Fórmula genérica:**
+```
+usuarios_mensais ≈ (banda_mensal_disponivel / consumo_medio_por_usuario_mes)
+```
+
+**Exemplo de estimativa:**
+- Se o app consome **M MB/usuário/mês** (assets + sync)
+- E a banda gratuita é **B GB/mês**
+→ Usuários suportados ≈ **(B×1024) / M**
+
+**Medição real (dados atuais):**
+- **Fast Data Transfer:** 1,74 MB
+- **Fast Origin Transfer:** 0,178 MB
+- **Total por dia (1 usuário):** ≈ **1,918 MB/dia**
+- **Estimativa mensal por usuário (30 dias):** ≈ **57,5 MB/mês**
+
+**Estimativa com sua banda mensal:**
+```
+usuarios_mensais ≈ (B×1024) / 57,5
+```
+
+**Com o plano grátis (100 GB/mês):**
+```
+usuarios_mensais ≈ (100×1024) / 57,5 ≈ 1.780 usuários
+```
+
+<h3>🧮 Limite gratuito real (interseção entre provedores)</h3>
+
+Considerando as três plataformas **simultaneamente** (Gemini, Vercel e OneSignal), o limite prático da app é dado pelo **menor teto** entre elas:
+
+- **Gemini Flash:** ~**500 usuários/dia** (1.000 req/dia ÷ 2 req/usuário/dia)
+- **Vercel (100 GB/mês):** ~**1.780 usuários/mês** (≈ 57,5 MB/usuário/mês)
+- **OneSignal:** **10.000 usuários** (limite por subscribers)
+
+**Conclusão:** o gargalo atual é o **Gemini Flash (≈ 500 usuários/dia)**. Mesmo que Vercel e OneSignal suportem mais, a IA é o limitador antes de depender de colaboração comunitária ou ajustes de infraestrutura.
+
+**Como medir consumo real (recomendado):**
+1. Abra o app em um celular real
+2. Use DevTools → Network → "Transfer" total
+3. Some o tráfego inicial + 30 dias de uso típico
+4. Use esse valor como `consumo_medio_por_usuario_mes`
 
 ---
 
