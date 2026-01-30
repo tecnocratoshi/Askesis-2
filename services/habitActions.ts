@@ -26,8 +26,9 @@ import {
 } from './selectors';
 import { 
     generateUUID, getTodayUTCIso, parseUTCIsoDate, triggerHaptic,
-    getSafeDate, addDays, toUTCIsoDateString, logger
+    getSafeDate, addDays, toUTCIsoDateString, logger, sanitizeText
 } from '../utils';
+import { ARCHIVE_IDLE_FALLBACK_MS } from '../constants';
 import { 
     closeModal, showConfirmationModal, renderAINotificationState,
     clearHabitDomCache, updateDayVisuals
@@ -246,7 +247,7 @@ export function performArchivalCheck() {
             await saveState();
         } catch (e) { logger.error('Archive worker failed', e); }
     };
-    if ('requestIdleCallback' in window) requestIdleCallback(() => run()); else setTimeout(run, 5000);
+    if ('requestIdleCallback' in window) requestIdleCallback(() => run()); else setTimeout(run, ARCHIVE_IDLE_FALLBACK_MS);
 }
 
 export function reorderHabit(movedHabitId: string, targetHabitId: string, pos: 'before' | 'after', skip = false) {
@@ -261,10 +262,7 @@ export function saveHabitFromModal() {
     if (!state.editingHabit) return;
     const { isNew, habitId, formData, targetDate } = state.editingHabit;
     if (formData.name) {
-        formData.name = formData.name.replace(/[<>{}]/g, '').trim();
-        if (formData.name.length > MAX_HABIT_NAME_LENGTH) {
-            formData.name = formData.name.slice(0, MAX_HABIT_NAME_LENGTH);
-        }
+        formData.name = sanitizeText(formData.name, MAX_HABIT_NAME_LENGTH);
     }
     const nameToUse = formData.nameKey ? t(formData.nameKey) : formData.name!;
     if (!nameToUse) return;
@@ -406,7 +404,7 @@ export async function resetApplicationData() {
     document.dispatchEvent(new CustomEvent('render-app'));
     try { await clearLocalPersistence(); } catch (e) { logger.error('Clear persistence failed', e); } finally { clearKey(); window.location.reload(); } 
 }
-export function handleSaveNote() { if (!state.editingNoteFor) return; const { habitId, date, time } = state.editingNoteFor, val = ui.notesTextarea.value.trim(), inst = ensureHabitInstanceData(date, habitId, time); if ((inst.note || '') !== val) { inst.note = val || undefined; state.uiDirtyState.habitListStructure = true; saveState(); document.dispatchEvent(new CustomEvent('render-app')); } closeModal(ui.notesModal); }
+export function handleSaveNote() { if (!state.editingNoteFor) return; const { habitId, date, time } = state.editingNoteFor, val = sanitizeText(ui.notesTextarea.value), inst = ensureHabitInstanceData(date, habitId, time); if ((inst.note || '') !== val) { inst.note = val || undefined; state.uiDirtyState.habitListStructure = true; saveState(); document.dispatchEvent(new CustomEvent('render-app')); } closeModal(ui.notesModal); }
 export function setGoalOverride(habitId: string, d: string, t: TimeOfDay, v: number) { 
     // BOOT LOCK
     if (!state.initialSyncDone) return;

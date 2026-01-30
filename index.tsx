@@ -28,7 +28,8 @@ import { initSync } from './listeners/sync';
 import { fetchStateFromCloud, syncStateWithCloud, setSyncStatus } from './services/cloud';
 import { hasLocalSyncKey, initAuth } from './services/api';
 import { updateAppBadge } from './services/badge';
-import { setupMidnightLoop } from './utils';
+import { setupMidnightLoop, logger } from './utils';
+import { BOOT_RELOAD_DELAY_MS, BOOT_SYNC_TIMEOUT_MS } from './constants';
 
 // --- AUTO-HEALING & INTEGRITY CHECK ---
 const BOOT_ATTEMPTS_KEY = 'askesis_boot_attempts';
@@ -37,7 +38,7 @@ const MAX_BOOT_ATTEMPTS = 3;
 function checkIntegrityAndHeal() {
     const attempts = parseInt(sessionStorage.getItem(BOOT_ATTEMPTS_KEY) || '0', 10);
     if (attempts >= MAX_BOOT_ATTEMPTS) {
-        console.warn("🚨 Detected boot loop. Initiating Auto-Healing...");
+        logger.warn('🚨 Detected boot loop. Initiating Auto-Healing...');
         if ('serviceWorker' in navigator) {
             navigator.serviceWorker.getRegistrations().then(registrations => {
                 for (const registration of registrations) { registration.unregister(); }
@@ -47,7 +48,7 @@ function checkIntegrityAndHeal() {
             caches.keys().then(names => { for (const name of names) { caches.delete(name); } });
         }
         sessionStorage.removeItem(BOOT_ATTEMPTS_KEY);
-        setTimeout(() => window.location.reload(), 500);
+        setTimeout(() => window.location.reload(), BOOT_RELOAD_DELAY_MS);
         return false;
     }
     sessionStorage.setItem(BOOT_ATTEMPTS_KEY, (attempts + 1).toString());
@@ -59,7 +60,7 @@ let isInitialized = false;
 
 const registerServiceWorker = () => {
     if ('serviceWorker' in navigator && !window.location.protocol.startsWith('file')) {
-        const loadSW = () => navigator.serviceWorker.register('/sw.js').catch(console.warn);
+        const loadSW = () => navigator.serviceWorker.register('/sw.js').catch(err => logger.warn('Service worker registration failed', err));
         if (document.readyState === 'complete') loadSW();
         else window.addEventListener('load', loadSW);
     }
@@ -79,11 +80,11 @@ async function loadInitialState() {
         const timeoutPromise = new Promise<void>((resolve) => 
             setTimeout(() => {
                 if (!state.initialSyncDone) {
-                    console.warn("Boot sync timeout. Unlocking UI.");
+                    logger.warn('Boot sync timeout. Unlocking UI.');
                     state.initialSyncDone = true; // Força desbloqueio lógico
                     resolve();
                 }
-            }, 5000)
+            }, BOOT_SYNC_TIMEOUT_MS)
         );
 
         Promise.race([syncPromise, timeoutPromise])
@@ -168,7 +169,7 @@ const startApp = () => {
     if (isInitializing || isInitialized) return;
     const loader = document.getElementById('initial-loader');
     init(loader).catch(err => {
-        console.error("Boot failed:", err);
+        logger.error('Boot failed', err);
         isInitializing = false;
         if ((window as any).showFatalError) {
             (window as any).showFatalError("Erro na inicialização: " + (err.message || err));

@@ -8,6 +8,8 @@
  * @description Biblioteca de Utilitários de Infraestrutura (Clean & Native).
  */
 
+import { HAPTIC_PATTERNS } from './constants';
+
 export const MS_PER_DAY = 86400000;
 
 // --- TIMERS ---
@@ -232,6 +234,15 @@ const ESCAPE_REPLACEMENTS: Record<string, string> = { '&': '&amp;', '<': '&lt;',
 const _escapeReplacer = (match: string) => ESCAPE_REPLACEMENTS[match];
 export function escapeHTML(str: string): string { return str ? str.replace(ESCAPE_HTML_REGEX, _escapeReplacer) : ''; }
 
+export function sanitizeText(value: string, maxLength?: number): string {
+    if (!value) return '';
+    let sanitized = value.replace(/[<>{}]/g, '').trim();
+    if (maxLength && sanitized.length > maxLength) {
+        sanitized = sanitized.slice(0, maxLength);
+    }
+    return sanitized;
+}
+
 // Simple Markdown Parser (Zero-Dep)
 const MD_INLINE_COMBINED_REGEX = /(\*\*\*(.*?)\*\*\*)|(\*\*(.*?)\*\*)|(\*(.*?)\*)|(~~(.*?)~~)/g;
 const MD_ORDERED_LIST_REGEX = /^\d+\.\s/;
@@ -296,13 +307,12 @@ export function simpleMarkdownToHTML(text: string): string {
 }
 
 // --- 3rd Party Wrappers ---
-export function pushToOneSignal(callback: (oneSignal: any) => void) {
+export function pushToOneSignal(callback: (oneSignal: OneSignalLike) => void) {
     if (typeof window === 'undefined') return;
     if (typeof window.OneSignal === 'undefined') { window.OneSignalDeferred = window.OneSignalDeferred || []; window.OneSignalDeferred.push(callback); }
     else callback(window.OneSignal);
 }
 
-const HAPTIC_PATTERNS = { 'selection': 8, 'light': 12, 'medium': 20, 'heavy': 40, 'success': [15, 50, 15], 'error': [40, 60, 15] };
 export function triggerHaptic(type: keyof typeof HAPTIC_PATTERNS) {
     if (typeof navigator !== 'undefined' && navigator.vibrate) try { navigator.vibrate(HAPTIC_PATTERNS[type]); } catch {}
 }

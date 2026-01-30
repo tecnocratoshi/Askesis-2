@@ -150,7 +150,7 @@ export function updateNotificationUI() {
         setTextContent(ui.notificationStatusDesc, t('notificationChangePending'));
         return;
     }
-    pushToOneSignal((os: any) => {
+    pushToOneSignal((os: OneSignalLike) => {
         const sub = os.User.PushSubscription.optedIn, perm = os.Notifications.permission, denied = perm === 'denied';
         ui.notificationToggle.checked = sub;
         ui.notificationToggle.disabled = denied;

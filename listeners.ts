@@ -20,10 +20,7 @@ import { pushToOneSignal, getTodayUTCIso, resetTodayCache, createDebounced, logg
 import { state, getPersistableState } from './state';
 import { syncStateWithCloud } from './services/cloud';
 import { checkAndAnalyzeDayContext } from './services/analysis';
-
-const NETWORK_DEBOUNCE_MS = 500;
-const PERMISSION_DELAY_MS = 500;
-const INTERACTION_DELAY_MS = 50;
+import { NETWORK_DEBOUNCE_MS, PERMISSION_DELAY_MS, INTERACTION_DELAY_MS } from './constants';
 
 let areListenersAttached = false;
 let visibilityRafId: number | null = null;
@@ -33,7 +30,7 @@ const _handlePermissionChange = () => {
     window.setTimeout(updateNotificationUI, PERMISSION_DELAY_MS);
 };
 
-const _handleOneSignalInit = (OneSignal: any) => {
+const _handleOneSignalInit = (OneSignal: OneSignalLike) => {
     OneSignal.Notifications.addEventListener('permissionChange', _handlePermissionChange);
     updateNotificationUI();
 };
@@ -80,10 +77,6 @@ const _handleVisibilityChange = () => {
     }
 };
 
-/**
- * BACKGROUND SYNC HANDLER:
- * Escuta mensagens vindas do Service Worker para realizar tarefas de sincronização em background.
- */
 const _handleServiceWorkerMessage = (event: MessageEvent) => {
     if (event.data && event.data.type === 'REQUEST_SYNC') {
         logger.info('[SW Message] Sincronização solicitada pelo Service Worker.');
@@ -126,7 +119,6 @@ export function setupEventListeners() {
     window.addEventListener('offline', _handleNetworkChange);
     document.addEventListener('visibilitychange', _handleVisibilityChange);
     
-    // Registra o listener para mensagens do Service Worker
     if ('serviceWorker' in navigator) {
         navigator.serviceWorker.addEventListener('message', _handleServiceWorkerMessage);
     }

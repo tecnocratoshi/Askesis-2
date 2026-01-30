@@ -237,6 +237,39 @@ export const state: {
     calendarDates: []
 };
 
+class CacheManager {
+    clearActiveHabits() {
+        state.activeHabitsCache.clear();
+    }
+
+    clearSchedule() {
+        state.scheduleCache.clear();
+    }
+
+    clearAll() {
+        state.streaksCache.clear();
+        state.scheduleCache.clear();
+        state.activeHabitsCache.clear();
+        state.unarchivedCache.clear();
+        state.habitAppearanceCache.clear();
+        state.daySummaryCache.clear();
+    }
+
+    invalidateForDate(dateISO: string) {
+        state.daySummaryCache.delete(dateISO);
+        state.activeHabitsCache.delete(dateISO);
+        this.invalidateDateKeyInCacheMap(state.streaksCache, dateISO);
+        this.invalidateDateKeyInCacheMap(state.habitAppearanceCache, dateISO);
+        this.invalidateDateKeyInCacheMap(state.scheduleCache, dateISO);
+    }
+
+    private invalidateDateKeyInCacheMap<T>(cache: Map<string, Map<string, T>>, dateISO: string) {
+        cache.forEach((dateMap) => dateMap.delete(dateISO));
+    }
+}
+
+export const cacheManager = new CacheManager();
+
 /**
  * Extrai o estado atual para um formato serializável (JSON-safe para sync).
  */
@@ -259,16 +292,11 @@ export function getPersistableState(): AppState {
 }
 
 export function clearActiveHabitsCache() {
-    state.activeHabitsCache.clear();
+    cacheManager.clearActiveHabits();
 }
 
 export function clearAllCaches() {
-    state.streaksCache.clear();
-    state.scheduleCache.clear();
-    state.activeHabitsCache.clear();
-    state.unarchivedCache.clear();
-    state.habitAppearanceCache.clear();
-    state.daySummaryCache.clear();
+    cacheManager.clearAll();
 }
 
 export function getHabitDailyInfoForDate(dateISO: string): Record<string, HabitDailyInfo> {
@@ -295,19 +323,11 @@ export function ensureHabitInstanceData(dateISO: string, habitId: string, time: 
 }
 
 export function clearScheduleCache() {
-    state.scheduleCache.clear();
-}
-
-function invalidateDateKeyInCacheMap<T>(cache: Map<string, Map<string, T>>, dateISO: string) {
-    cache.forEach((dateMap) => dateMap.delete(dateISO));
+    cacheManager.clearSchedule();
 }
 
 export function invalidateCachesForDateChange(dateISO: string, habitIds: string[]) {
-    state.daySummaryCache.delete(dateISO);
-    state.activeHabitsCache.delete(dateISO);
-    invalidateDateKeyInCacheMap(state.streaksCache, dateISO);
-    invalidateDateKeyInCacheMap(state.habitAppearanceCache, dateISO);
-    invalidateDateKeyInCacheMap(state.scheduleCache, dateISO);
+    cacheManager.invalidateForDate(dateISO);
 }
 
 export function isChartDataDirty(): boolean {

@@ -9,22 +9,21 @@
  * @description Cliente de API e Gerenciamento de Chaves de Sincronização.
  */
 
+import { logger } from '../utils';
+import { API_TIMEOUT_MS, API_MAX_RETRIES, API_RETRY_DELAY_MS } from '../constants';
+
 const SYNC_KEY_STORAGE_KEY = 'habitTrackerSyncKey';
-const API_TIMEOUT_MS = 12000;
-const API_MAX_RETRIES = 2;
-const API_RETRY_DELAY_MS = 500;
+
 const LOG_PREFIX = '[API]';
-const SHOULD_LOG = typeof process !== 'undefined' && !!process.env && process.env.NODE_ENV !== 'production';
 
 function logWarn(message: string, error?: unknown) {
-    if (!SHOULD_LOG) return;
-    if (error !== undefined) console.warn(`${LOG_PREFIX} ${message}`, error);
-    else console.warn(`${LOG_PREFIX} ${message}`);
+    if (error !== undefined) logger.warn(`${LOG_PREFIX} ${message}`, error);
+    else logger.warn(`${LOG_PREFIX} ${message}`);
 }
 
 function logError(message: string, error?: unknown) {
-    if (error !== undefined) console.error(`${LOG_PREFIX} ${message}`, error);
-    else console.error(`${LOG_PREFIX} ${message}`);
+    if (error !== undefined) logger.error(`${LOG_PREFIX} ${message}`, error);
+    else logger.error(`${LOG_PREFIX} ${message}`);
 }
 
 function wait(ms: number): Promise<void> {

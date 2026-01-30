@@ -21,6 +21,7 @@ const SVG_OPEN = '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24"
 const PATH_OPEN = '<path d="';
 const SVG_CLOSE = '"/></svg>';
 const makeIcon = (d: string) => `${SVG_OPEN}${PATH_OPEN}${d}${SVG_CLOSE}`;
+const makeFilledIcon = (d: string, fill = 'currentColor') => `${SVG_OPEN}<path fill="${fill}" d="${d}"/></svg>`;
 
 // --- SHARED GEOMETRIES (Raw Path Data - Nano Optimized) ---
 
@@ -91,7 +92,7 @@ export const UI_ICONS = {
     snoozed: makeIcon('M12 22a10 10 0 1 0 0-20 10 10 0 0 0 0 20zM12 6v6l4 2'),
     swipeDelete: makeIcon(D_TRASH),
     swipeNote: makeIcon(D_PAGE),
-    swipeNoteHasNote: SVG_OPEN + '<path fill="currentColor" d="' + D_PAGE + '"/></svg>',
+    swipeNoteHasNote: makeFilledIcon(D_PAGE),
     editAction: makeIcon(D_PEN),
     graduateAction: makeIcon('M22 10v6M2 10l10-5 10 5-10 5zM6 12v5c3 3 9 3 12 0v-5'),
     endAction: makeIcon(D_CIRCLE_OUTLINE + 'M15 9l-6 6M9 9l6 6'),

@@ -15,6 +15,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { state, HABIT_STATE } from '../state';
 import { HabitService } from '../services/HabitService';
 import { createTestHabit, clearTestState, clickTestHabit, createTestHabitCard } from './test-utils';
+import { logger } from '../utils';
 
 // Utilitário para medir performance
 class PerformanceMonitor {
@@ -102,7 +103,7 @@ describe('⚡ SUPER-TESTE 3: Estresse e Performance', () => {
     expect(state.habits).toHaveLength(100);
     expect(duration).toBeLessThan(100); // Budget: 100ms
 
-    console.log(`✅ Criou 100 hábitos em ${duration.toFixed(2)}ms`);
+    logger.info(`✅ Criou 100 hábitos em ${duration.toFixed(2)}ms`);
   });
 
   it('deve popular 3 anos de histórico em menos de 500ms', () => {
@@ -139,7 +140,7 @@ describe('⚡ SUPER-TESTE 3: Estresse e Performance', () => {
     expect(firstDay).toBe(HABIT_STATE.DONE);
     expect(lastDay).toBe(HABIT_STATE.DONE);
 
-    console.log(`✅ Populou 3 anos (54,750 registros) em ${duration.toFixed(2)}ms`);
+    logger.info(`✅ Populou 3 anos (54,750 registros) em ${duration.toFixed(2)}ms`);
   });
 
   it('deve ler 10,000 status em menos de 50ms (benchmark O(1))', () => {
@@ -171,7 +172,7 @@ describe('⚡ SUPER-TESTE 3: Estresse e Performance', () => {
 
     expect(duration).toBeLessThan(50); // Budget: 50ms para 10k leituras
 
-    console.log(`✅ Leu 10,000 status em ${duration.toFixed(2)}ms (${(duration / 10000).toFixed(4)}ms cada)`);
+    logger.info(`✅ Leu 10,000 status em ${duration.toFixed(2)}ms (${(duration / 10000).toFixed(4)}ms cada)`);
   });
 
   it('deve renderizar 100 cartões em menos de 200ms', () => {
@@ -197,7 +198,7 @@ describe('⚡ SUPER-TESTE 3: Estresse e Performance', () => {
     expect(habitList.children.length).toBe(100);
     expect(duration).toBeLessThan(200); // Budget: 200ms
 
-    console.log(`✅ Renderizou 100 cartões em ${duration.toFixed(2)}ms`);
+    logger.info(`✅ Renderizou 100 cartões em ${duration.toFixed(2)}ms`);
   });
 
   it('deve executar 1000 toggles consecutivos em menos de 100ms', () => {
@@ -219,7 +220,7 @@ describe('⚡ SUPER-TESTE 3: Estresse e Performance', () => {
     const finalStatus = HabitService.getStatus(habitId, date, 'Morning');
     expect(finalStatus).toBe(HABIT_STATE.NULL);
 
-    console.log(`✅ Executou 1000 toggles em ${duration.toFixed(2)}ms`);
+    logger.info(`✅ Executou 1000 toggles em ${duration.toFixed(2)}ms`);
   });
 
   it('deve manter performance constante com crescimento de dados', () => {
@@ -261,9 +262,9 @@ describe('⚡ SUPER-TESTE 3: Estresse e Performance', () => {
     const maxVariance = minTime < 0.5 ? 4 : 0.5; // 400% ou 50%
     expect(variance).toBeLessThan(maxVariance);
 
-    console.log(`✅ Variação de performance: ${(variance * 100).toFixed(1)}%`);
-    console.log(`   100 registros: ${timings[0].toFixed(2)}ms`);
-    console.log(`   10000 registros: ${timings[4].toFixed(2)}ms`);
+    logger.info(`✅ Variação de performance: ${(variance * 100).toFixed(1)}%`);
+    logger.info(`   100 registros: ${timings[0].toFixed(2)}ms`);
+    logger.info(`   10000 registros: ${timings[4].toFixed(2)}ms`);
   });
 
   it('não deve vazar memória após 10,000 operações', () => {
@@ -291,9 +292,9 @@ describe('⚡ SUPER-TESTE 3: Estresse e Performance', () => {
       // Crescimento deve ser razoável (< 10MB para 10k ops)
       expect(growthMB).toBeLessThan(10);
 
-      console.log(`✅ Crescimento de memória: ${growthMB.toFixed(2)}MB`);
+      logger.info(`✅ Crescimento de memória: ${growthMB.toFixed(2)}MB`);
     } else {
-      console.log('⚠️  performance.memory não disponível');
+      logger.warn('⚠️  performance.memory não disponível');
     }
   });
 
@@ -321,7 +322,7 @@ describe('⚡ SUPER-TESTE 3: Estresse e Performance', () => {
       expect(HabitService.getStatus(id, date, 'Morning')).toBe(HABIT_STATE.DONE);
     });
 
-    console.log(`✅ Processou batch de 1000 em ${duration.toFixed(2)}ms`);
+    logger.info(`✅ Processou batch de 1000 em ${duration.toFixed(2)}ms`);
   });
 
   it('deve serializar 10 anos de dados em menos de 1s', () => {
@@ -354,11 +355,11 @@ describe('⚡ SUPER-TESTE 3: Estresse e Performance', () => {
 
     expect(duration).toBeLessThan(1000); // Budget: 1s
 
-    console.log(`✅ Serializou 10 anos de dados em ${duration.toFixed(2)}ms`);
+    logger.info(`✅ Serializou 10 anos de dados em ${duration.toFixed(2)}ms`);
   });
 
   afterEach(() => {
     const report = monitor.report();
-    console.log('\n📊 Performance Report:', report);
+    logger.info('\n📊 Performance Report:', report);
   });
 });

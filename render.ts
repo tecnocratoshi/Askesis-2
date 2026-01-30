@@ -9,7 +9,8 @@
  */
 
 import { state, LANGUAGES } from './state';
-import { parseUTCIsoDate, toUTCIsoDateString, addDays, pushToOneSignal, getTodayUTCIso } from './utils';
+import { parseUTCIsoDate, toUTCIsoDateString, addDays, pushToOneSignal, getTodayUTCIso, createDebounced } from './utils';
+import { QUOTE_COLLAPSE_DEBOUNCE_MS } from './constants';
 import { ui } from './render/ui';
 import { t, setLanguage, formatDate } from './i18n'; 
 import { UI_ICONS } from './render/icons';
@@ -225,7 +226,7 @@ export function updateNotificationUI() {
         setTextContent(ui.notificationStatusDesc, t('notificationChangePending'));
         return;
     }
-    pushToOneSignal((OneSignal: any) => {
+    pushToOneSignal((OneSignal: OneSignalLike) => {
         const isPushEnabled = OneSignal.User.PushSubscription.optedIn;
         const permission = OneSignal.Notifications.permission;
         if (ui.notificationToggle.checked !== isPushEnabled) ui.notificationToggle.checked = isPushEnabled;
@@ -257,17 +258,23 @@ export function renderAINotificationState() {
 }
 
 let _quoteCollapseListener: ((e: Event) => void) | null = null;
+let _quoteCollapseScrollHandler: (() => void) | null = null;
+
+const _collapseExpandedQuote = () => {
+    if (ui.stoicQuoteDisplay.querySelector('.quote-expanded')) {
+        _cachedQuoteState = null;
+        renderStoicQuote();
+    }
+};
 function _setupQuoteAutoCollapse() {
     if (_quoteCollapseListener) return;
     _quoteCollapseListener = (e: Event) => {
         if ((e.target as HTMLElement).closest('.stoic-quote')) return;
-        if (ui.stoicQuoteDisplay.querySelector('.quote-expanded')) {
-            _cachedQuoteState = null;
-            renderStoicQuote(); 
-        }
+        _collapseExpandedQuote();
     };
+    _quoteCollapseScrollHandler = createDebounced(_collapseExpandedQuote, QUOTE_COLLAPSE_DEBOUNCE_MS);
     document.addEventListener('click', _quoteCollapseListener, { capture: true });
-    ui.habitContainer.addEventListener('scroll', _quoteCollapseListener, { passive: true });
+    ui.habitContainer.addEventListener('scroll', _quoteCollapseScrollHandler, { passive: true });
 }
 
 export function renderStoicQuote() {

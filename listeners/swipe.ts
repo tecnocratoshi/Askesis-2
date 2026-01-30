@@ -19,10 +19,18 @@ import { triggerHaptic } from '../utils';
 import { DOM_SELECTORS, CSS_CLASSES } from '../render/constants';
 import { renderApp } from '../render';
 import { state } from '../state';
+import {
+    SWIPE_INTENT_THRESHOLD,
+    SWIPE_ACTION_THRESHOLD,
+    SWIPE_HAPTIC_THRESHOLD,
+    SWIPE_BLOCK_CLICK_MS
+} from '../constants';
 
 // CONSTANTS (Smi Values)
 const DIR_NONE = 0, DIR_HORIZ = 1, DIR_VERT = 2;
-const INTENT_THRESHOLD = 5, ACTION_THRESHOLD = 10, HAPTIC_THRESHOLD = 15;
+const INTENT_THRESHOLD = SWIPE_INTENT_THRESHOLD;
+const ACTION_THRESHOLD = SWIPE_ACTION_THRESHOLD;
+const HAPTIC_THRESHOLD = SWIPE_HAPTIC_THRESHOLD;
 
 const SwipeState = {
     isActive: 0, startX: 0, startY: 0, currentX: 0, direction: DIR_NONE,
@@ -63,7 +71,7 @@ function _blockSubsequentClick(deltaX: number) {
         window.removeEventListener('click', block, true);
     };
     window.addEventListener('click', block, true);
-    setTimeout(() => window.removeEventListener('click', block, true), 150);
+    setTimeout(() => window.removeEventListener('click', block, true), SWIPE_BLOCK_CLICK_MS);
 }
 
 const _updateVisuals = () => {

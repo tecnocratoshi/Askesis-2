@@ -26,11 +26,12 @@ import { triggerHaptic } from '../utils';
 import { DOM_SELECTORS, CSS_CLASSES } from '../render/constants';
 import { isCurrentlySwiping } from './swipe';
 import { renderApp } from '../render'; // CHAOS FIX: Import renderApp for catch-up
+import { DRAG_SCROLL_ZONE_PX, DRAG_MAX_SCROLL_SPEED, DRAG_DROP_INDICATOR_GAP } from '../constants';
 
 // CONFIGURAÇÃO
-const SCROLL_ZONE_PX = 80; // Zona ativa para scroll
-const MAX_SCROLL_SPEED = 15; // Velocidade máxima (px/frame)
-const DROP_INDICATOR_GAP = 4; // Espaçamento visual
+const SCROLL_ZONE_PX = DRAG_SCROLL_ZONE_PX;
+const MAX_SCROLL_SPEED = DRAG_MAX_SCROLL_SPEED;
+const DROP_INDICATOR_GAP = DRAG_DROP_INDICATOR_GAP;
 
 // SNIPER OPTIMIZATION: Feature detection for Typed OM
 const hasTypedOM = typeof window !== 'undefined' && !!(window.CSS && (window as any).CSSTranslate && CSS.px);

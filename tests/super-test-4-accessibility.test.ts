@@ -15,6 +15,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { state, HABIT_STATE } from '../state';
 import { HabitService } from '../services/HabitService';
 import { createTestHabit, clearTestState, clickTestHabit, createTestHabitCard, getHabitName } from './test-utils';
+import { logger } from '../utils';
 
 // Simulador de eventos de teclado
 class KeyboardSimulator {
@@ -241,7 +242,7 @@ describe('♿ SUPER-TESTE 4: Acessibilidade Total', () => {
 
     const report = validator.getReport();
     if (!report.passed) {
-      console.error('❌ Erros de acessibilidade:', report.errors);
+      logger.error('❌ Erros de acessibilidade:', report.errors);
     }
     expect(report.passed).toBe(true);
   });
@@ -502,10 +503,10 @@ describe('♿ SUPER-TESTE 4: Acessibilidade Total', () => {
   afterEach(() => {
     const report = validator.getReport();
     if (!report.passed) {
-      console.log('\n♿ Relatório de Acessibilidade:');
-      console.log(`   Erros encontrados: ${report.errorCount}`);
+      logger.info('\n♿ Relatório de Acessibilidade:');
+      logger.info(`   Erros encontrados: ${report.errorCount}`);
       report.errors.forEach((error, i) => {
-        console.log(`   ${i + 1}. ${error}`);
+        logger.info(`   ${i + 1}. ${error}`);
       });
     }
   });

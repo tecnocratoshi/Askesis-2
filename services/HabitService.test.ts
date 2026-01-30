@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { HabitService } from './HabitService';
 import { state, HABIT_STATE } from '../state';
+import { logger } from '../utils';
 
 // ================================================================================
 // 🧪 ORACLE: Implementação simples e visível para comparação
@@ -228,7 +229,7 @@ describe('🔥 NUCLEAR QA: Fuzzing & Oracle (Propriedade-Based Testing)', () => 
 
             if (serviceResult !== oracleResult) {
                 divergences++;
-                console.error(
+                logger.error(
                     `[Iteration ${i}] Divergência detectada: ` +
                     `${date} ${time} - Service: ${serviceResult}, Oracle: ${oracleResult}`
                 );
@@ -236,7 +237,7 @@ describe('🔥 NUCLEAR QA: Fuzzing & Oracle (Propriedade-Based Testing)', () => 
         }
 
         expect(divergences).toBe(0);
-        console.log(`✅ 1000 operações: NENHUMA divergência entre Service e Oracle`);
+        logger.info('✅ 1000 operações: NENHUMA divergência entre Service e Oracle');
     });
 
     it('🛡️ deve lidar com argumentos inválidos sem crashes (Guard Clauses)', () => {
@@ -277,7 +278,7 @@ describe('🔥 NUCLEAR QA: Fuzzing & Oracle (Propriedade-Based Testing)', () => 
             }
         });
 
-        console.log('✅ Validação de guard clauses completa');
+        logger.info('✅ Validação de guard clauses completa');
     });
 
     it('🌍 deve suportar anos extremos (Y2K38, Y9999, 1970)', () => {
@@ -298,7 +299,7 @@ describe('🔥 NUCLEAR QA: Fuzzing & Oracle (Propriedade-Based Testing)', () => 
             expect(result).toBe(HABIT_STATE.DONE);
         });
 
-        console.log('✅ Datas extremas funcionam corretamente');
+        logger.info('✅ Datas extremas funcionam corretamente');
     });
 
     it('🔄 deve ser idempotente (mesma operação 10x = 1x)', () => {
@@ -315,7 +316,7 @@ describe('🔥 NUCLEAR QA: Fuzzing & Oracle (Propriedade-Based Testing)', () => 
         const result = HabitService.getStatus(habitId, date, time);
         expect(result).toBe(targetState);
 
-        console.log('✅ Operação idempotente validada');
+        logger.info('✅ Operação idempotente validada');
     });
 
     it('🔀 deve ser comutativa (ordem não importa para reads)', () => {
@@ -341,7 +342,7 @@ describe('🔥 NUCLEAR QA: Fuzzing & Oracle (Propriedade-Based Testing)', () => 
         };
 
         expect(sequence1()).toBe(sequence2());
-        console.log('✅ Comutatividade validada');
+        logger.info('✅ Comutatividade validada');
     });
 
     it('💾 deve preservar estado após múltiplas operações (State Machine)', () => {
@@ -364,7 +365,7 @@ describe('🔥 NUCLEAR QA: Fuzzing & Oracle (Propriedade-Based Testing)', () => 
             expect(current).toBe(nextState);
         });
 
-        console.log('✅ State machine transitions validadas');
+        logger.info('✅ State machine transitions validadas');
     });
 
     it('🧬 deve isolar dados por habitId (não-interferência)', () => {
@@ -385,7 +386,7 @@ describe('🔥 NUCLEAR QA: Fuzzing & Oracle (Propriedade-Based Testing)', () => 
             expect(actual).toBe(expected);
         });
 
-        console.log('✅ Isolamento de 100 hábitos validado');
+        logger.info('✅ Isolamento de 100 hábitos validado');
     });
 
     it('⏱️ deve ser performático com 10,000 operações', () => {
@@ -406,7 +407,7 @@ describe('🔥 NUCLEAR QA: Fuzzing & Oracle (Propriedade-Based Testing)', () => 
 
         // 10,000 operações devem ser < 500ms
         expect(duration).toBeLessThan(500);
-        console.log(`✅ 10,000 operações em ${duration.toFixed(2)}ms (${(duration / OPERATIONS).toFixed(4)}ms/op)`);
+        logger.info(`✅ 10,000 operações em ${duration.toFixed(2)}ms (${(duration / OPERATIONS).toFixed(4)}ms/op)`);
     });
 
     it('🔥 deve rejeitar BigInt inválidos (Bit Corruption)', () => {
@@ -433,7 +434,7 @@ describe('🔥 NUCLEAR QA: Fuzzing & Oracle (Propriedade-Based Testing)', () => 
             }
         });
 
-        console.log('✅ Corrupção de BigInt tratada graciosamente');
+        logger.info('✅ Corrupção de BigInt tratada graciosamente');
     });
 
     it('📅 deve ser versioning-safe (dados antigos + novos)', () => {
@@ -449,6 +450,6 @@ describe('🔥 NUCLEAR QA: Fuzzing & Oracle (Propriedade-Based Testing)', () => 
         expect(newResult).toBe(HABIT_STATE.DONE);
         expect(state.monthlyLogs.has(oldKey)).toBe(true);
 
-        console.log('✅ Compatibilidade de versionamento validada');
+        logger.info('✅ Compatibilidade de versionamento validada');
     });
 });

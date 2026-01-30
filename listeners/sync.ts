@@ -11,6 +11,7 @@ import { renderApp, openSyncDebugModal, clearHabitDomCache } from "../render";
 import { showConfirmationModal } from "../render/modals";
 import { storeKey, clearKey, hasLocalSyncKey, getSyncKey, isValidKeyFormat } from "../services/api";
 import { generateUUID } from "../utils";
+import { SYNC_ENABLE_RETRY_MS, SYNC_COPY_FEEDBACK_MS, SYNC_INPUT_FOCUS_MS } from "../constants";
 import { getPersistableState, state, clearActiveHabitsCache } from "../state";
 import { mergeStates } from "../services/dataMerge";
 
@@ -99,7 +100,7 @@ const _handleEnableSync = () => {
         ui.syncDisplayKeyView.dataset.context = 'setup';
         showView('displayKey');
         syncStateWithCloud(getPersistableState(), true);
-        setTimeout(() => ui.enableSyncBtn.disabled = false, 500);
+        setTimeout(() => ui.enableSyncBtn.disabled = false, SYNC_ENABLE_RETRY_MS);
     } catch (e: any) {
         ui.enableSyncBtn.disabled = false;
         if (ui.syncErrorMsg) {
@@ -109,7 +110,7 @@ const _handleEnableSync = () => {
     }
 };
 
-const _handleEnterKeyView = () => { showView('enterKey'); setTimeout(() => ui.syncKeyInput.focus(), 100); };
+const _handleEnterKeyView = () => { showView('enterKey'); setTimeout(() => ui.syncKeyInput.focus(), SYNC_INPUT_FOCUS_MS); };
 const _handleCancelEnterKey = () => { ui.syncKeyInput.value = ''; if (ui.syncErrorMsg) ui.syncErrorMsg.classList.add('hidden'); _refreshViewState(); };
 const _handleSubmitKey = () => {
     const key = ui.syncKeyInput.value.trim();
@@ -126,7 +127,7 @@ const _handleCopyKey = () => {
         navigator.clipboard.writeText(key).then(() => {
             const originalText = ui.copyKeyBtn.innerHTML;
             ui.copyKeyBtn.innerHTML = '✓';
-            setTimeout(() => { ui.copyKeyBtn.innerHTML = originalText; }, 1500);
+            setTimeout(() => { ui.copyKeyBtn.innerHTML = originalText; }, SYNC_COPY_FEEDBACK_MS);
         }).catch(() => alert("Copie manualmente: " + key));
     }
 };

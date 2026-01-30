@@ -29,15 +29,23 @@ import { ui } from './ui';
 import { t, formatDate, formatDecimal, formatEvolution } from '../i18n';
 import { getTodayUTCIso, parseUTCIsoDate, toUTCIsoDateString, MS_PER_DAY, logger } from '../utils';
 import { setTextContent } from './dom';
+import {
+    CHART_DAYS as CHART_DAYS_CONST,
+    CHART_INITIAL_SCORE,
+    CHART_MAX_DAILY_CHANGE_RATE,
+    CHART_PLUS_BONUS_MULTIPLIER,
+    CHART_SVG_HEIGHT,
+    CHART_PADDING as CHART_PADDING_CONST
+} from '../constants';
 
-const CHART_DAYS = 30;
-const INITIAL_SCORE = 100;
-const MAX_DAILY_CHANGE_RATE = 0.025; 
-const PLUS_BONUS_MULTIPLIER = 1.5; 
+const CHART_DAYS = CHART_DAYS_CONST;
+const INITIAL_SCORE = CHART_INITIAL_SCORE;
+const MAX_DAILY_CHANGE_RATE = CHART_MAX_DAILY_CHANGE_RATE;
+const PLUS_BONUS_MULTIPLIER = CHART_PLUS_BONUS_MULTIPLIER;
 
 // VISUAL CONSTANTS
-export const SVG_HEIGHT = 75; 
-export const CHART_PADDING = { top: 5, right: 0, bottom: 5, left: 3 }; // Increased top padding for curve overshoot safety
+export const SVG_HEIGHT = CHART_SVG_HEIGHT;
+export const CHART_PADDING = CHART_PADDING_CONST;
 
 // PERFORMANCE [2025-04-13]: Hoisted Intl Options.
 const OPTS_AXIS_LABEL_SHORT: Intl.DateTimeFormatOptions = { 

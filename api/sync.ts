@@ -9,6 +9,15 @@ export const config = {
   runtime: 'edge',
 };
 
+const SHOULD_LOG = typeof process !== 'undefined' && !!process.env && process.env.NODE_ENV !== 'production';
+const logger = {
+        error: (message: string, error?: unknown) => {
+                if (!SHOULD_LOG) return;
+                if (error !== undefined) console.error(message, error);
+                else console.error(message);
+        }
+};
+
 const LUA_SHARDED_UPDATE = `
 local key = KEYS[1]
 local newTs = tonumber(ARGV[1])
@@ -184,7 +193,7 @@ export default async function handler(req: Request) {
 
         return new Response(null, { status: 405 });
     } catch (error: any) {
-        console.error("KV Error:", error);
+        logger.error('KV Error:', error);
         return new Response(JSON.stringify({ error: error.message || 'Internal Server Error' }), { status: 500, headers: HEADERS_BASE });
     }
 }

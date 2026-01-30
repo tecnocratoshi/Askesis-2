@@ -56,14 +56,11 @@ import {
 } from '../services/habitActions';
 import { t, setLanguage } from '../i18n';
 import { setupReelRotary } from '../render/rotary';
-import { simpleMarkdownToHTML, pushToOneSignal, getContrastColor, addDays, parseUTCIsoDate, toUTCIsoDateString, triggerHaptic, logger } from '../utils';
+import { simpleMarkdownToHTML, pushToOneSignal, getContrastColor, addDays, parseUTCIsoDate, toUTCIsoDateString, triggerHaptic, logger, escapeHTML, sanitizeText } from '../utils';
 import { setTextContent } from '../render/dom';
-
-// SECURITY: Limite rígido para inputs de texto para prevenir State Bloat e DoS.
 
 // --- STATIC HELPERS ---
 
-// HELPER: Centraliza lógica de navegação do Almanaque para evitar duplicação (DRY)
 function _navigateToDateFromAlmanac(dateISO: string) {
     state.selectedDate = dateISO;
     
@@ -135,7 +132,6 @@ function _validateAndFeedback(newName: string): boolean {
 // --- STATIC EVENT HANDLERS ---
 
 const _handleManageHabitsClick = () => {
-    // Guard: evita empilhamento de modais
     if (ui.manageModal.classList.contains('visible')) return;
     
     triggerHaptic('light');
@@ -145,7 +141,6 @@ const _handleManageHabitsClick = () => {
 };
 
 const _handleFabClick = () => {
-    // Guard: evita empilhamento de modais
     if (ui.exploreModal.classList.contains('visible')) return;
 
     triggerHaptic('light');
@@ -161,7 +156,6 @@ const _handleHabitListClick = (e: MouseEvent) => {
     const habitId = button.closest<HTMLLIElement>('li.habit-list-item')?.dataset.habitId;
     if (!habitId) return;
 
-    // Guard: evita abrir confirmação duplicada
     if (ui.confirmModal.classList.contains('visible')) return;
 
     triggerHaptic('light');
@@ -185,7 +179,6 @@ const _handleManageModalClick = (e: MouseEvent) => {
 };
 
 const _handleResetAppClick = () => {
-    // Guard: evita empilhamento de confirmação
     if (ui.confirmModal.classList.contains('visible')) return;
 
     triggerHaptic('light');
@@ -201,7 +194,7 @@ const _handleResetAppClick = () => {
 };
 
 const _handleNotificationToggleChange = () => {
-    pushToOneSignal(async (OneSignal: any) => {
+    pushToOneSignal(async (OneSignal: OneSignalLike) => {
         const wantsEnabled = ui.notificationToggle.checked;
         if (wantsEnabled) {
             await OneSignal.Notifications.requestPermission();
@@ -251,7 +244,6 @@ const _handleAiEvalClick = async () => {
     
     triggerHaptic('light');
 
-    // OFFLINE HANDLING
     if (!navigator.onLine) {
         try {
             const { STOIC_QUOTES } = await import('../data/quotes');
@@ -263,13 +255,13 @@ const _handleAiEvalClick = async () => {
             const sourceArray = offlineQuotes.length > 0 ? offlineQuotes : STOIC_QUOTES;
             const randomQuote = sourceArray[Math.floor(Math.random() * sourceArray.length)];
             const lang = state.activeLanguageCode as 'pt'|'en'|'es';
-            const quoteText = randomQuote.original_text[lang];
-            const author = t(randomQuote.author);
+            const quoteText = escapeHTML(randomQuote.original_text[lang]);
+            const author = escapeHTML(t(randomQuote.author));
 
             const message = `
                 <div class="offline-header">
-                    <h3 class="offline-title">${t('aiOfflineTitle')}</h3>
-                    <p class="offline-desc">${t('aiOfflineMessage')}</p>
+                    <h3 class="offline-title">${escapeHTML(t('aiOfflineTitle'))}</h3>
+                    <p class="offline-desc">${escapeHTML(t('aiOfflineMessage'))}</p>
                 </div>
                 <div class="offline-quote-box">
                     <blockquote class="offline-quote-text">
@@ -322,10 +314,6 @@ const _handleConfirmClick = () => {
     triggerHaptic('light');
     const action = state.confirmAction;
     
-    // RACE CONDITION FIX [2025-06-03]: Execute action BEFORE closing modal.
-    // This ensures that contexts (ActionContext) are captured/used before
-    // the modal's onCancel/onClose handler wipes them out.
-    // If the action relies on ActionContext (like deletions), this order is critical.
     try {
         action?.();
     } catch (e) {
@@ -335,8 +323,6 @@ const _handleConfirmClick = () => {
     state.confirmAction = null;
     state.confirmEditAction = null;
     
-    // CRITICAL FIX [2025-06-05]: Suppress callbacks (like onCancel) when confirming.
-    // This prevents the sync logic's onCancel handler from reverting the key after a successful overwrite.
     closeModal(ui.confirmModal, true);
 };
 
@@ -344,8 +330,6 @@ const _handleEditClick = () => {
     triggerHaptic('light');
     const editAction = state.confirmEditAction;
     
-    // RACE CONDITION FIX [2025-06-03]: Same logic as Confirm. 
-    // Capture context/execute action first.
     try {
         editAction?.();
     } catch (e) {
@@ -355,7 +339,6 @@ const _handleEditClick = () => {
     state.confirmAction = null;
     state.confirmEditAction = null;
     
-    // Suppress default cancel callbacks as "Edit" is a form of affirmative action here.
     closeModal(ui.confirmModal, true);
 };
 
@@ -425,12 +408,9 @@ const _handleHabitNameInput = () => {
     if (!state.editingHabit) return;
     
     const habitNameInput = ui.editHabitForm.elements.namedItem('habit-name') as HTMLInputElement;
-    let newName = habitNameInput.value;
-
-    if (newName.length > MAX_HABIT_NAME_LENGTH) {
-        newName = newName.substring(0, MAX_HABIT_NAME_LENGTH);
-        habitNameInput.value = newName;
-    }
+    const rawName = habitNameInput.value;
+    const newName = sanitizeText(rawName, MAX_HABIT_NAME_LENGTH);
+    if (newName !== rawName) habitNameInput.value = newName;
 
     if (state.editingHabit.formData.nameKey) {
         delete state.editingHabit.formData.nameKey;
@@ -469,10 +449,8 @@ const _handleColorGridClick = (e: MouseEvent) => {
         triggerHaptic('light');
         const color = swatch.dataset.color!;
         
-        // Update State
         state.editingHabit.formData.color = color;
 
-        // Update UI (Direct & Fast - avoiding full renderIconPicker which rebuilds DOM)
         const iconColor = getContrastColor(color);
         ui.habitIconPickerBtn.style.backgroundColor = color;
         ui.habitIconPickerBtn.style.color = iconColor;
@@ -480,15 +458,11 @@ const _handleColorGridClick = (e: MouseEvent) => {
         ui.colorPickerGrid.querySelector('.selected')?.classList.remove('selected');
         swatch.classList.add('selected');
 
-        // Update Icon Picker Grid Variables directly (No DOM thrashing)
         ui.iconPickerGrid.style.setProperty('--current-habit-bg-color', color);
         ui.iconPickerGrid.style.setProperty('--current-habit-fg-color', iconColor);
 
-        // Cleanup View State
         ui.iconPickerModal.classList.remove('is-picking-color');
         
-        // Close Modal suppressing callbacks (since we handled updates manually)
-        // This prevents double-rendering the icon grid.
         closeModal(ui.colorPickerModal, true);
     }
 };

@@ -17,14 +17,21 @@ import { hasLocalSyncKey, getSyncKey, apiFetch } from './api';
 import { renderApp, updateNotificationUI } from '../render';
 import { mergeStates } from './dataMerge';
 import { HabitService } from './HabitService';
+import {
+    CLOUD_SYNC_DEBOUNCE_MS,
+    CLOUD_SYNC_LOG_MAX_ENTRIES,
+    CLOUD_SYNC_LOG_MAX_AGE_MS,
+    CLOUD_HASH_CACHE_MAX_ENTRIES,
+    CLOUD_WORKER_TIMEOUT_MS
+} from '../constants';
 
 // PERFORMANCE: Debounce para evitar salvar na nuvem a cada pequena alteração
-const DEBOUNCE_DELAY = 2000; 
+const DEBOUNCE_DELAY = CLOUD_SYNC_DEBOUNCE_MS; 
 const HASH_STORAGE_KEY = 'askesis_sync_hashes';
-const SYNC_LOG_MAX_ENTRIES = 50;
-const SYNC_LOG_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
-const HASH_CACHE_MAX_ENTRIES = 2000;
-const WORKER_TIMEOUT_MS = 15000;
+const SYNC_LOG_MAX_ENTRIES = CLOUD_SYNC_LOG_MAX_ENTRIES;
+const SYNC_LOG_MAX_AGE_MS = CLOUD_SYNC_LOG_MAX_AGE_MS;
+const HASH_CACHE_MAX_ENTRIES = CLOUD_HASH_CACHE_MAX_ENTRIES;
+const WORKER_TIMEOUT_MS = CLOUD_WORKER_TIMEOUT_MS;
 
 let isSyncInProgress = false;
 let pendingSyncState: AppState | null = null;
@@ -199,7 +206,7 @@ export function setSyncStatus(statusKey: 'syncSaving' | 'syncSynced' | 'syncErro
 }
 
 export function setupNotificationListeners() {
-    pushToOneSignal((OneSignal: any) => {
+    pushToOneSignal((OneSignal: OneSignalLike) => {
         OneSignal.Notifications.addEventListener('permissionChange', () => {
             setTimeout(updateNotificationUI, 500);
         });

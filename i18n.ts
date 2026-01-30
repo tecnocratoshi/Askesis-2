@@ -22,6 +22,7 @@
 
 import { state, TimeOfDay, LANGUAGES } from './state';
 import { pushToOneSignal, logger } from './utils';
+import { LANG_LOAD_TIMEOUT_MS } from './constants';
 
 // INTERFACE ABSTRATA: Permite que o cache aceite tanto a classe nativa quanto o mock de fallback sem erros de tipo.
 interface ListFormatter {
@@ -98,7 +99,7 @@ let latestLangRequestId = 0;
 const INTERPOLATION_REGEX = /{([^{}]+)}/g;
 
 // NETWORK TIMEOUT: Evita Zombie State.
-const LANG_LOAD_TIMEOUT = 5000;
+const LANG_LOAD_TIMEOUT = LANG_LOAD_TIMEOUT_MS;
 
 /**
  * Carrega o arquivo JSON de tradução.
@@ -498,7 +499,7 @@ export async function setLanguage(langCode: 'pt' | 'en' | 'es') {
         document.documentElement.lang = langCode;
         localStorage.setItem('habitTrackerLanguage', langCode);
         
-        pushToOneSignal((OneSignal: any) => {
+        pushToOneSignal((OneSignal: OneSignalLike) => {
             OneSignal.User.setLanguage(langCode);
         });
 

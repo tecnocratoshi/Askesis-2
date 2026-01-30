@@ -25,28 +25,29 @@ import { Quote, StoicTag } from '../data/quotes';
 import { calculateDaySummary, getEffectiveScheduleForHabitOnDate, calculateHabitStreak, getScheduleForDate } from './selectors';
 import { toUTCIsoDateString, parseUTCIsoDate, getTodayUTCIso } from '../utils';
 import { HabitService } from './HabitService';
+import {
+    QUOTE_WEIGHTS,
+    QUOTE_MIN_DISPLAY_DURATION_MS,
+    QUOTE_TRIUMPH_ENTER,
+    QUOTE_TRIUMPH_EXIT,
+    QUOTE_STRUGGLE_ENTER,
+    QUOTE_STRUGGLE_EXIT,
+    QUOTE_HISTORY_LOOKBACK,
+    QUOTE_HISTORY_GOOD_THRESHOLD
+} from '../constants';
 
 // --- TUNING CONSTANTS ---
-const WEIGHTS = {
-    AI_MATCH: 50,
-    SPHERE_MATCH: 40,
-    RECOVERY: 35,
-    PERFORMANCE: 30,
-    MOMENTUM: 25,
-    TIME_OF_DAY: 15,
-    VIRTUE_ALIGN: 10,
-    RECENTLY_SHOWN: -100 
-};
+const WEIGHTS = QUOTE_WEIGHTS;
 
 // HYSTERESIS CONSTANTS
-const MIN_DISPLAY_DURATION = 20 * 60 * 1000;
-const TRIUMPH_ENTER = 0.80; 
-const TRIUMPH_EXIT = 0.70;  
-const STRUGGLE_ENTER = 0.25;
-const STRUGGLE_EXIT = 0.15;  
+const MIN_DISPLAY_DURATION = QUOTE_MIN_DISPLAY_DURATION_MS;
+const TRIUMPH_ENTER = QUOTE_TRIUMPH_ENTER; 
+const TRIUMPH_EXIT = QUOTE_TRIUMPH_EXIT;  
+const STRUGGLE_ENTER = QUOTE_STRUGGLE_ENTER;
+const STRUGGLE_EXIT = QUOTE_STRUGGLE_EXIT;  
 
-const HISTORY_LOOKBACK = 10;
-const HISTORY_GOOD_THRESHOLD = 0.5;
+const HISTORY_LOOKBACK = QUOTE_HISTORY_LOOKBACK;
+const HISTORY_GOOD_THRESHOLD = QUOTE_HISTORY_GOOD_THRESHOLD;
 
 type PerformanceState = 'neutral' | 'struggle' | 'urgency' | 'triumph' | 'defeat';
 

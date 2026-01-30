@@ -14,6 +14,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { state, HABIT_STATE, Habit } from '../state';
 import { HabitService } from '../services/HabitService';
 import { createTestHabit, clearTestState, clickTestHabit, getHabitName } from './test-utils';
+import { logger } from '../utils';
 
 // Simulador de desastres
 class ChaosMonkey {
@@ -523,14 +524,14 @@ describe('🔥 SUPER-TESTE 5: Recuperação de Desastres', () => {
   afterEach(() => {
     const report = validator.getReport();
     if (!report.passed) {
-      console.log('\n🔥 Relatório de Recuperação:');
-      console.log(`   Erros: ${report.errorCount}`);
-      console.log(`   Avisos: ${report.warningCount}`);
+      logger.info('\n🔥 Relatório de Recuperação:');
+      logger.info(`   Erros: ${report.errorCount}`);
+      logger.info(`   Avisos: ${report.warningCount}`);
       
       if (report.errors.length > 0) {
-        console.log('   Detalhes dos erros:');
+        logger.info('   Detalhes dos erros:');
         report.errors.forEach((error, i) => {
-          console.log(`     ${i + 1}. ${error}`);
+          logger.info(`     ${i + 1}. ${error}`);
         });
       }
     }

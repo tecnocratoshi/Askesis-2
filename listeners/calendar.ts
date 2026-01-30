@@ -14,14 +14,22 @@ import { renderApp, renderFullCalendar, openModal, closeModal } from '../render'
 import { appendDayToStrip, prependDayToStrip, scrollToSelectedDate } from '../render/calendar';
 import { parseUTCIsoDate, triggerHaptic, getTodayUTCIso } from '../utils';
 import { CSS_CLASSES, DOM_SELECTORS } from '../render/constants';
+import {
+    CALENDAR_SCROLL_THRESHOLD_PX,
+    CALENDAR_BASE_BATCH_SIZE,
+    CALENDAR_TURBO_BATCH_SIZE,
+    CALENDAR_TURBO_TIME_WINDOW_MS,
+    CALENDAR_DOM_CAP,
+    CALENDAR_LONG_PRESS_MS
+} from '../constants';
 import { markAllHabitsForDate } from '../services/habitActions';
 
 // --- CONFIGURAÇÃO ADAPTATIVA ---
-const SCROLL_THRESHOLD_PX = 350; // Pixels antes da borda para disparar
-const BASE_BATCH_SIZE = 15;      // Modo Padrão: Navegação casual
-const TURBO_BATCH_SIZE = 30;     // Modo Turbo: Navegação rápida ("Viagem no tempo")
-const TURBO_TIME_WINDOW_MS = 1500; // Janela de tempo para ativar o Turbo
-const DOM_CAP = 200;             // Limite de nós no DOM
+const SCROLL_THRESHOLD_PX = CALENDAR_SCROLL_THRESHOLD_PX; // Pixels antes da borda para disparar
+const BASE_BATCH_SIZE = CALENDAR_BASE_BATCH_SIZE;      // Modo Padrão: Navegação casual
+const TURBO_BATCH_SIZE = CALENDAR_TURBO_BATCH_SIZE;     // Modo Turbo: Navegação rápida ("Viagem no tempo")
+const TURBO_TIME_WINDOW_MS = CALENDAR_TURBO_TIME_WINDOW_MS; // Janela de tempo para ativar o Turbo
+const DOM_CAP = CALENDAR_DOM_CAP;             // Limite de nós no DOM
 
 // --- STATE MACHINE ---
 const CalendarGestureState = {
@@ -138,7 +146,7 @@ const _handlePointerDown = (e: PointerEvent) => {
         triggerHaptic('medium');
         item.classList.remove('is-pressing');
         _openQuickActions(item);
-    }, 500); // 500ms Long Press
+    }, CALENDAR_LONG_PRESS_MS);
 
     const cancel = () => {
         clearTimeout(CalendarGestureState.pressTimerId);
@@ -157,7 +165,6 @@ const _handleStripClick = (e: MouseEvent) => {
         return;
     }
 
-    // FIX: Ler a data do DOM (Dataset) elimina erros de cálculo de índice após saltos.
     const item = (e.target as HTMLElement).closest<HTMLElement>(DOM_SELECTORS.DAY_ITEM);
     
     if (item && item.dataset.date) {
@@ -167,7 +174,6 @@ const _handleStripClick = (e: MouseEvent) => {
             triggerHaptic('selection');
             state.selectedDate = clickedDate;
             
-            // Atualização visual rápida
             const prev = ui.calendarStrip.querySelector(`.${CSS_CLASSES.SELECTED}`);
             if (prev) {
                 prev.classList.remove(CSS_CLASSES.SELECTED);
@@ -177,10 +183,6 @@ const _handleStripClick = (e: MouseEvent) => {
             item.classList.add(CSS_CLASSES.SELECTED);
             item.setAttribute('aria-current', 'date');
             item.setAttribute('tabindex', '0');
-            
-            // FIX SCROLL JUMP: Removemos scrollToSelectedDate(true) daqui.
-            // O usuário clicou, o item já está visível. Não queremos mover a fita.
-            // A renderização do calendário só ocorre se uiDirtyState.calendarVisuals for true (o que não setamos aqui).
             
             // Render App Content (Habits)
             state.uiDirtyState.habitListStructure = true;

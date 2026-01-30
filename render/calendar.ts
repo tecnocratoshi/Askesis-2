@@ -15,13 +15,16 @@ import { getTodayUTCIso, toUTCIsoDateString, parseUTCIsoDate, addDays, pad2 } fr
 import { formatInteger, getLocaleDayName } from '../i18n'; 
 import { setTextContent } from './dom';
 import { CSS_CLASSES } from './constants';
+import { CALENDAR_INITIAL_BUFFER_DAYS, CALENDAR_MAX_DOM_NODES } from '../constants';
 
 // --- CONFIGURAÇÃO SWEET SPOT ---
-const INITIAL_BUFFER_DAYS = 15; // Teleport Buffer: Mantém o DOM inicial leve
-const MAX_DOM_NODES = 200;      // Teto rígido de memória para o Scroll Infinito
+const INITIAL_BUFFER_DAYS = CALENDAR_INITIAL_BUFFER_DAYS;
+const MAX_DOM_NODES = CALENDAR_MAX_DOM_NODES;
 
 let dayItemTemplate: HTMLElement | null = null;
 let fullCalendarDayTemplate: HTMLElement | null = null;
+type DayCacheEntry = { el: HTMLElement; ringEl: HTMLElement; numEl: HTMLElement };
+const dayElementCache = new Map<string, DayCacheEntry>();
 
 const OPTS_ARIA = { weekday: 'long', day: 'numeric', month: 'long', timeZone: 'UTC' } as const;
 
@@ -41,29 +44,19 @@ const getFullCalendarDayTemplate = () => fullCalendarDayTemplate || (fullCalenda
 
 // --- CORE RENDERING (STRIP) ---
 
-/**
- * Aplica visualmente os dados de progresso a um elemento de dia (Anel e Indicador +).
- * DRY: Usado tanto na criação quanto na atualização cirúrgica.
- */
-function applyDayVisuals(el: HTMLElement, dateISO: string, dateObj?: Date) {
-    const ringEl = el.querySelector(`.${CSS_CLASSES.DAY_PROGRESS_RING}`) as HTMLElement;
-    const numEl = ringEl.firstElementChild as HTMLElement;
+function applyDayVisuals(el: HTMLElement, dateISO: string, dateObj?: Date, ringEl?: HTMLElement, numEl?: HTMLElement) {
+    const ring = ringEl ?? (el.querySelector(`.${CSS_CLASSES.DAY_PROGRESS_RING}`) as HTMLElement);
+    const num = numEl ?? (ring.firstElementChild as HTMLElement);
     
-    // Recalcula o sumário baseando-se no estado atual
     const { completedPercent, snoozedPercent, showPlusIndicator } = calculateDaySummary(dateISO, dateObj);
     
-    // CSS Variables drive the conic-gradient
-    ringEl.style.setProperty('--completed-percent', `${completedPercent}%`);
-    ringEl.style.setProperty('--snoozed-percent', `${snoozedPercent}%`);
+    ring.style.setProperty('--completed-percent', `${completedPercent}%`);
+    ring.style.setProperty('--snoozed-percent', `${snoozedPercent}%`);
     
-    if (showPlusIndicator) numEl.classList.add('has-plus');
-    else numEl.classList.remove('has-plus');
+    if (showPlusIndicator) num.classList.add('has-plus');
+    else num.classList.remove('has-plus');
 }
 
-/**
- * Cria um elemento de dia isolado.
- * SOURCE OF TRUTH: O dataset.date é a verdade absoluta para os listeners.
- */
 function createDayElement(dateISO: string, isSelected: boolean, isToday: boolean): HTMLElement {
     const el = getDayItemTemplate().cloneNode(true) as HTMLElement;
     const dateObj = parseUTCIsoDate(dateISO);
@@ -80,8 +73,7 @@ function createDayElement(dateISO: string, isSelected: boolean, isToday: boolean
     if (isSelected) el.classList.add(CSS_CLASSES.SELECTED);
     if (isToday) el.classList.add(CSS_CLASSES.TODAY);
 
-    // Aplica visuais iniciais
-    applyDayVisuals(el, dateISO, dateObj);
+    applyDayVisuals(el, dateISO, dateObj, ringEl, numEl);
 
     el.setAttribute('aria-label', dateObj.toLocaleDateString(state.activeLanguageCode, OPTS_ARIA));
     if (isSelected) {
@@ -91,34 +83,24 @@ function createDayElement(dateISO: string, isSelected: boolean, isToday: boolean
         el.setAttribute('tabindex', '-1');
     }
 
+    dayElementCache.set(dateISO, { el, ringEl, numEl });
+
     return el;
 }
 
-/**
- * SURGICAL UPDATE: Atualiza apenas o visual de um dia específico sem recriar o DOM.
- * Chamado quando um hábito é marcado/desmarcado.
- */
 export function updateDayVisuals(dateISO: string) {
     if (!ui.calendarStrip) return;
     
-    // Busca o elemento específico. Se não existir (scroll off-screen), ignora.
-    const el = ui.calendarStrip.querySelector(`.${CSS_CLASSES.DAY_ITEM}[data-date="${dateISO}"]`) as HTMLElement;
+    const entry = dayElementCache.get(dateISO);
     
-    if (el) {
-        applyDayVisuals(el, dateISO);
+    if (entry) {
+        applyDayVisuals(entry.el, dateISO, undefined, entry.ringEl, entry.numEl);
     }
 }
 
-/**
- * Renderiza a fita (Strip) centrada na data selecionada.
- * ESTRATÉGIA: Teletransporte (Hard Reset).
- * Limpa o DOM antigo e cria um novo universo de +/- 15 dias ao redor da data foco.
- */
 export function renderCalendar() {
     if (!ui.calendarStrip) return;
 
-    // PERFORMANCE CHECK: Só re-renderiza se houver flag de dirty OU se a fita estiver vazia.
-    // Isso protege contra re-renders acidentais disparados pelo loop principal.
     if (!state.uiDirtyState.calendarVisuals && ui.calendarStrip.children.length > 0) return;
 
     const centerDateISO = state.selectedDate || getTodayUTCIso();
@@ -134,13 +116,12 @@ export function renderCalendar() {
         frag.appendChild(el);
     }
 
-    ui.calendarStrip.innerHTML = ''; // Limpeza Total (GC Trigger)
+    ui.calendarStrip.innerHTML = '';
+    dayElementCache.clear();
     ui.calendarStrip.appendChild(frag);
     
-    // Reset Dirty Flag
     state.uiDirtyState.calendarVisuals = false;
     
-    // Força o scroll para a posição correta (Teleporte)
     requestAnimationFrame(() => scrollToSelectedDate(false));
 }
 
@@ -158,7 +139,9 @@ export function appendDayToStrip(lastDateISO: string, container: Node = ui.calen
 
     // [GARBAGE COLLECTION] Mantém o DOM leve
     if (container === ui.calendarStrip && ui.calendarStrip.children.length > MAX_DOM_NODES) {
-        ui.calendarStrip.firstElementChild?.remove();
+        const removed = ui.calendarStrip.firstElementChild as HTMLElement | null;
+        if (removed?.dataset.date) dayElementCache.delete(removed.dataset.date);
+        removed?.remove();
     }
 
     return iso;
@@ -183,7 +166,9 @@ export function prependDayToStrip(firstDateISO: string, container: Node = ui.cal
 
     // [GARBAGE COLLECTION] Mantém o DOM leve
     if (container === ui.calendarStrip && ui.calendarStrip.children.length > MAX_DOM_NODES) {
-        ui.calendarStrip.lastElementChild?.remove();
+        const removed = ui.calendarStrip.lastElementChild as HTMLElement | null;
+        if (removed?.dataset.date) dayElementCache.delete(removed.dataset.date);
+        removed?.remove();
     }
 
     return iso;
@@ -210,6 +195,8 @@ export function renderFullCalendar() {
         const d = prevMonthDays - startDayOfWeek + 1 + i;
         const el = getFullCalendarDayTemplate().cloneNode(true) as HTMLElement;
         el.classList.add('other-month');
+        el.setAttribute('aria-disabled', 'true');
+        el.setAttribute('tabindex', '-1');
         (el.firstElementChild!.firstElementChild as HTMLElement).textContent = formatInteger(d);
         frag.appendChild(el);
     }
@@ -220,20 +207,28 @@ export function renderFullCalendar() {
 
     for (let i = 1; i <= daysInMonth; i++) {
         const iso = prefix + pad2(i);
+        const dateObj = parseUTCIsoDate(iso);
         const el = getFullCalendarDayTemplate().cloneNode(true) as HTMLElement;
         const ring = el.firstElementChild as HTMLElement;
         const num = ring.firstElementChild as HTMLElement;
         
         num.textContent = formatInteger(i);
         el.dataset.date = iso;
+        el.setAttribute('aria-label', dateObj.toLocaleDateString(state.activeLanguageCode, OPTS_ARIA));
 
-        const { completedPercent, snoozedPercent, showPlusIndicator } = calculateDaySummary(iso, parseUTCIsoDate(iso));
+        const { completedPercent, snoozedPercent, showPlusIndicator } = calculateDaySummary(iso, dateObj);
         
         if (completedPercent > 0) ring.style.setProperty('--completed-percent', `${completedPercent}%`);
         if (snoozedPercent > 0) ring.style.setProperty('--snoozed-percent', `${snoozedPercent}%`);
         if (showPlusIndicator) num.classList.add('has-plus');
 
-        if (iso === state.selectedDate) el.classList.add(CSS_CLASSES.SELECTED);
+        if (iso === state.selectedDate) {
+            el.classList.add(CSS_CLASSES.SELECTED);
+            el.setAttribute('aria-current', 'date');
+            el.setAttribute('tabindex', '0');
+        } else {
+            el.setAttribute('tabindex', '-1');
+        }
         if (iso === todayISO) el.classList.add(CSS_CLASSES.TODAY);
 
         frag.appendChild(el);

@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import { mergeStates } from './dataMerge';
 import { AppState, HABIT_STATE } from '../state';
 import { HabitService } from './HabitService';
+import { logger } from '../utils';
 
 // Helper para criar estados falsos
 const createMockState = (ts: number, logs = new Map()): AppState => ({
@@ -268,7 +269,7 @@ describe('🔥 NUCLEAR QA: Distributed Chaos (Split-Brain Scenarios)', () => {
         const finalB = cluster.getClient('B').state.monthlyLogs.get('habit-1_2024-01');
         const finalCloud = cluster.getClient('Cloud').state.monthlyLogs.get('habit-1_2024-01');
 
-        console.log(`✅ Three-Body: A=${finalA}, B=${finalB}, Cloud=${finalCloud}`);
+        logger.info(`✅ Three-Body: A=${finalA}, B=${finalB}, Cloud=${finalCloud}`);
         expect(finalCloud).toBeDefined();
     });
 
@@ -290,7 +291,7 @@ describe('🔥 NUCLEAR QA: Distributed Chaos (Split-Brain Scenarios)', () => {
         // A lógica de merge é granular (por dia/bit), não por arquivo inteiro
         expect(merged.monthlyLogs.get('habit-1_2024-01')).toBeDefined();
 
-        console.log('✅ Future-From-The-Past: Dados corrompidos não limparam histórico válido');
+        logger.info('✅ Future-From-The-Past: Dados corrompidos não limparam histórico válido');
     });
 
     it('🔄 deve ser comutativo em Property-Based Fuzzing (100 operações)', async () => {
@@ -328,7 +329,7 @@ describe('🔥 NUCLEAR QA: Distributed Chaos (Split-Brain Scenarios)', () => {
         expect(logsA.length).toBe(logsB.length);
         expect(JSON.stringify(logsA)).toBe(JSON.stringify(logsB));
 
-        console.log(`✅ Commutativity: ${logsA.length} operações sempre convergem`);
+        logger.info(`✅ Commutativity: ${logsA.length} operações sempre convergem`);
     });
 
     it('🛡️ deve preservar identidade com null/undefined (Identity Preservation)', async () => {
@@ -349,7 +350,7 @@ describe('🔥 NUCLEAR QA: Distributed Chaos (Split-Brain Scenarios)', () => {
         expect(result).toBeDefined();
         expect(result?.monthlyLogs.get('habit-1_2024-01')).toBe(1n);
 
-        console.log('✅ Identity Preservation: null input não corrompeu estado válido');
+        logger.info('✅ Identity Preservation: null input não corrompeu estado válido');
     });
 
     it('🌐 deve convergir em Network Partition (Eventual Consistency)', async () => {
@@ -393,7 +394,7 @@ describe('🔥 NUCLEAR QA: Distributed Chaos (Split-Brain Scenarios)', () => {
         const converged = cluster.hasConverged();
         expect(converged).toBe(true);
 
-        console.log('✅ Network Partition: 5 clientes convergiram após sincronização aleatória');
+        logger.info('✅ Network Partition: 5 clientes convergiram após sincronização aleatória');
     });
 
     it('⚡ deve lidar com Race Condition (Concurrent Writes)', async () => {
@@ -408,7 +409,7 @@ describe('🔥 NUCLEAR QA: Distributed Chaos (Split-Brain Scenarios)', () => {
         const merged = await mergeStates(client1, client2);
 
         expect(merged.monthlyLogs.get('habit-1_2024-01')).toBeDefined();
-        console.log(`✅ Race Condition: Resolvido para ${merged.monthlyLogs.get('habit-1_2024-01')}`);
+        logger.info(`✅ Race Condition: Resolvido para ${merged.monthlyLogs.get('habit-1_2024-01')}`);
     });
 
     it('🔁 deve ser idempotente (Merge(A,B) = Merge(Merge(A,B), B))', async () => {
@@ -433,7 +434,7 @@ describe('🔥 NUCLEAR QA: Distributed Chaos (Split-Brain Scenarios)', () => {
             .sort((a, b) => a[0].localeCompare(b[0]));
 
         expect(JSON.stringify(logs1)).toBe(JSON.stringify(logs2));
-        console.log('✅ Idempotence: Merge(A,B) = Merge(Merge(A,B), B)');
+        logger.info('✅ Idempotence: Merge(A,B) = Merge(Merge(A,B), B)');
     });
 
     it('🎯 deve serializar e desserializar sem perda (Roundtrip)', async () => {
@@ -454,6 +455,6 @@ describe('🔥 NUCLEAR QA: Distributed Chaos (Split-Brain Scenarios)', () => {
         expect(restored.get('habit-1_2024-01')).toBe(123456n);
         expect(restored.get('habit-2_2024-02')).toBe(789012n);
 
-        console.log('✅ Roundtrip Serialization: Sem perda de dados');
+        logger.info('✅ Roundtrip Serialization: Sem perda de dados');
     });
 });
