@@ -27,7 +27,7 @@ import { state, isChartDataDirty } from '../state';
 import { calculateDaySummary } from '../services/selectors';
 import { ui } from './ui';
 import { t, formatDate, formatDecimal, formatEvolution } from '../i18n';
-import { getTodayUTCIso, parseUTCIsoDate, toUTCIsoDateString, MS_PER_DAY } from '../utils';
+import { getTodayUTCIso, parseUTCIsoDate, toUTCIsoDateString, MS_PER_DAY, logger } from '../utils';
 import { setTextContent } from './dom';
 
 const CHART_DAYS = 30;
@@ -141,7 +141,7 @@ function calculateChartData(): ChartDataPoint[] {
         
         return chartDataPool;
     } catch (e) {
-        console.error("Critical error in calculateChartData:", e);
+        logger.error("Critical error in calculateChartData:", e);
         return [];
     }
 }
@@ -345,7 +345,7 @@ export function renderChart() {
             isChartDirty = true;
         }
     } catch (e) {
-        console.error("Failed to render chart:", e);
+        logger.error("Failed to render chart:", e);
         ui.chartContainer.classList.add('is-empty');
     }
 }

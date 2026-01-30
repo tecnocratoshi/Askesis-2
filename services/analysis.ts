@@ -14,6 +14,7 @@ import { state, getHabitDailyInfoForDate, TimeOfDay } from '../state';
 import { runWorkerTask } from './cloud';
 import { apiFetch } from './api';
 import { t, getAiLanguageName } from '../i18n';
+import { logger } from '../utils';
 import { saveState } from './persistence';
 
 const _analysisInFlight = new Map<string, Promise<any>>();
@@ -64,7 +65,7 @@ export async function checkAndAnalyzeDayContext(dateISO: string) {
                 saveState(); 
             }
         } catch (e) { 
-            console.error("Context analysis failed", e); 
+            logger.error("Context analysis failed", e); 
         } finally { 
             _analysisInFlight.delete(dateISO); 
         }

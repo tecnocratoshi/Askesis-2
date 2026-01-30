@@ -12,6 +12,7 @@ import { state, AppState, Habit, HabitDailyInfo, APP_VERSION, getPersistableStat
 import { migrateState } from './migration';
 import { HabitService } from './HabitService';
 import { clearHabitDomCache } from '../render';
+import { logger } from '../utils';
 
 const DB_NAME = 'AskesisDB', DB_VERSION = 1, STORE_NAME = 'app_state';
 const STATE_JSON_KEY = 'askesis_core_json';
@@ -100,7 +101,7 @@ async function saveStateInternal(immediate = false, suppressSync = false) {
         try {
             await saveSplitState(structuredData);
         } catch (e) { 
-            console.error("IDB Save Failed:", e); 
+            logger.error("IDB Save Failed:", e); 
         }
         
         if (!suppressSync) {
@@ -177,7 +178,7 @@ export const persistStateLocally = async (data: AppState) => {
     try {
         await saveSplitState(data);
     } catch (e) {
-        console.error("[Persistence] Immediate Cloud Persistence Failed:", e);
+        logger.error("[Persistence] Immediate Cloud Persistence Failed:", e);
     }
 };
 
@@ -204,7 +205,7 @@ export async function loadState(cloudState?: AppState): Promise<AppState | null>
                 tx.onerror = () => resolve();
             });
         } catch (e) {
-            console.warn("[Persistence] Failed to read state from IDB", e);
+            logger.warn("[Persistence] Failed to read state from IDB", e);
         }
     }
 
@@ -275,7 +276,7 @@ export const clearLocalPersistence = async () => {
         tx.objectStore(STORE_NAME).clear();
         await new Promise(r => tx.oncomplete = r);
     } catch (e) {
-        console.warn("IDB clear failed", e);
+        logger.warn("IDB clear failed", e);
     }
     // Use HabitService to clear logs and cache consistently
     HabitService.clearAllLogs();

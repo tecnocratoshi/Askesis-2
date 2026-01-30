@@ -55,7 +55,7 @@ import {
 } from '../services/habitActions';
 import { t, setLanguage } from '../i18n';
 import { setupReelRotary } from '../render/rotary';
-import { simpleMarkdownToHTML, pushToOneSignal, getContrastColor, addDays, parseUTCIsoDate, toUTCIsoDateString, triggerHaptic } from '../utils';
+import { simpleMarkdownToHTML, pushToOneSignal, getContrastColor, addDays, parseUTCIsoDate, toUTCIsoDateString, triggerHaptic, logger } from '../utils';
 import { setTextContent } from '../render/dom';
 
 // SECURITY: Limite rígido para inputs de texto para prevenir State Bloat e DoS.
@@ -283,7 +283,7 @@ const _handleAiEvalClick = async () => {
             ui.aiResponse.innerHTML = message;
             openModal(ui.aiModal);
         } catch (e) {
-            console.error("Failed to load offline quote", e);
+            logger.error("Failed to load offline quote", e);
         }
         return;
     }
@@ -329,7 +329,7 @@ const _handleConfirmClick = () => {
     try {
         action?.();
     } catch (e) {
-        console.error("Action execution failed", e);
+        logger.error("Action execution failed", e);
     }
 
     state.confirmAction = null;
@@ -349,7 +349,7 @@ const _handleEditClick = () => {
     try {
         editAction?.();
     } catch (e) {
-        console.error("Edit Action execution failed", e);
+        logger.error("Edit Action execution failed", e);
     }
 
     state.confirmAction = null;

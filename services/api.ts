@@ -13,6 +13,19 @@ const SYNC_KEY_STORAGE_KEY = 'habitTrackerSyncKey';
 const API_TIMEOUT_MS = 12000;
 const API_MAX_RETRIES = 2;
 const API_RETRY_DELAY_MS = 500;
+const LOG_PREFIX = '[API]';
+const SHOULD_LOG = typeof process !== 'undefined' && !!process.env && process.env.NODE_ENV !== 'production';
+
+function logWarn(message: string, error?: unknown) {
+    if (!SHOULD_LOG) return;
+    if (error !== undefined) console.warn(`${LOG_PREFIX} ${message}`, error);
+    else console.warn(`${LOG_PREFIX} ${message}`);
+}
+
+function logError(message: string, error?: unknown) {
+    if (error !== undefined) console.error(`${LOG_PREFIX} ${message}`, error);
+    else console.error(`${LOG_PREFIX} ${message}`);
+}
 
 function wait(ms: number): Promise<void> {
     return new Promise(resolve => setTimeout(resolve, ms));
@@ -80,7 +93,7 @@ async function getSyncKeyHash(): Promise<string | null> {
             
             return hashHex;
         } catch (e) {
-            console.warn("[API] Crypto Digest failed, falling back to raw auth", e);
+            logWarn('Crypto Digest failed, falling back to raw auth', e);
         }
     }
     return null;
@@ -124,7 +137,10 @@ export async function apiFetch(endpoint: string, options: RequestInit = {}, incl
 
             // Gestão de Resiliência: Se o servidor diz que a chave não existe mais, limpa localmente
             if (response.status === 401 && hasLocalSyncKey()) {
-                console.error("[API] Unauthorized. Local key might be revoked.");
+                clearKey();
+                cachedHash = null;
+                lastKeyForHash = null;
+                logWarn('Unauthorized. Sync key cleared.');
             }
 
             return response;
@@ -134,7 +150,7 @@ export async function apiFetch(endpoint: string, options: RequestInit = {}, incl
                 await wait(API_RETRY_DELAY_MS * (attempt + 1));
                 continue;
             }
-            console.error('[API] Network error during apiFetch', error);
+            logError('Network error during apiFetch', error);
         }
     }
 
@@ -146,6 +162,6 @@ export const initAuth = async () => {
     try {
         await getSyncKeyHash();
     } catch (error) {
-        console.warn('[API] initAuth failed', error);
+        logWarn('initAuth failed', error);
     }
 };

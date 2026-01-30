@@ -1021,7 +1021,7 @@ import {
 } from './selectors';
 import { 
     generateUUID, getTodayUTCIso, parseUTCIsoDate, triggerHaptic,
-    getSafeDate, addDays, toUTCIsoDateString
+    getSafeDate, addDays, toUTCIsoDateString, logger
 } from '../utils';
 import { 
     closeModal, showConfirmationModal, renderAINotificationState,
@@ -1217,7 +1217,7 @@ const _applyHabitDeletion = <span class="cstat-no" title="statement not covered"
         });
 <span class="cstat-no" title="statement not covered" >        state.unarchivedCache.clear();</span>
 <span class="cstat-no" title="statement not covered" >        saveState();</span>
-    }).catch(<span class="fstat-no" title="function not covered" >e =&gt; <span class="cstat-no" title="statement not covered" >c</span>onsole.error("Archive pruning failed", e))</span>;
+    }).catch(<span class="fstat-no" title="function not covered" >e =&gt; <span class="cstat-no" title="statement not covered" >l</span>ogger.error("Archive pruning failed", e))</span>;
 &nbsp;
 <span class="cstat-no" title="statement not covered" >    _notifyChanges(true, true);</span>
 <span class="cstat-no" title="statement not covered" >    ActionContext.reset();</span>
@@ -1239,7 +1239,7 @@ export function <span class="fstat-no" title="function not covered" >performArch
             const up = <span class="cstat-no" title="statement not covered" >await runWorkerTask&lt;Record&lt;string, string&gt;&gt;('archive', buckets);</span>
 <span class="cstat-no" title="statement not covered" >            Object.keys(up).forEach(<span class="fstat-no" title="function not covered" >y =&gt; {</span> <span class="cstat-no" title="statement not covered" >state.archives[y] = up[y]; <span class="cstat-no" title="statement not covered" >s</span>tate.unarchivedCache.delete(y); <span class="cstat-no" title="statement not covered" >O</span>bject.keys(buckets[y].additions).forEach(<span class="fstat-no" title="function not covered" >k =&gt; <span class="cstat-no" title="statement not covered" >d</span>elete state.dailyData[k])</span>; }</span>);</span>
 <span class="cstat-no" title="statement not covered" >            await saveState();</span>
-        } catch (e) { <span class="cstat-no" title="statement not covered" >console.error(e); }</span>
+        } catch (e) { <span class="cstat-no" title="statement not covered" >logger.error('Archive worker failed', e); }</span>
     };
 <span class="cstat-no" title="statement not covered" >    if ('requestIdleCallback' in window) <span class="cstat-no" title="statement not covered" >requestIdleCallback(<span class="fstat-no" title="function not covered" >() =&gt; <span class="cstat-no" title="statement not covered" >r</span>un())</span>; else <span class="cstat-no" title="statement not covered" >s</span>etTimeout(run, 5000);</span></span>
 }
@@ -1393,7 +1393,7 @@ export function <span class="fstat-no" title="function not covered" >graduateHab
 export async function <span class="fstat-no" title="function not covered" >resetApplicationData() { </span>
 <span class="cstat-no" title="statement not covered" >    state.habits = []; <span class="cstat-no" title="statement not covered" >s</span>tate.dailyData = {}; <span class="cstat-no" title="statement not covered" >s</span>tate.archives = {}; <span class="cstat-no" title="statement not covered" >s</span>tate.notificationsShown = []; <span class="cstat-no" title="statement not covered" >s</span>tate.pending21DayHabitIds = []; <span class="cstat-no" title="statement not covered" >s</span>tate.pendingConsolidationHabitIds = []; <span class="cstat-no" title="statement not covered" >s</span>tate.monthlyLogs = new Map();</span>
 <span class="cstat-no" title="statement not covered" >    document.dispatchEvent(new CustomEvent('render-app'));</span>
-<span class="cstat-no" title="statement not covered" >    try { <span class="cstat-no" title="statement not covered" >await clearLocalPersistence(); }</span> catch (e) { <span class="cstat-no" title="statement not covered" >console.error(e); }</span> finally { <span class="cstat-no" title="statement not covered" >clearKey(); <span class="cstat-no" title="statement not covered" >w</span>indow.location.reload(); } </span></span>
+<span class="cstat-no" title="statement not covered" >    try { <span class="cstat-no" title="statement not covered" >await clearLocalPersistence(); }</span> catch (e) { <span class="cstat-no" title="statement not covered" >logger.error('Clear persistence failed', e); }</span> finally { <span class="cstat-no" title="statement not covered" >clearKey(); <span class="cstat-no" title="statement not covered" >w</span>indow.location.reload(); } </span></span>
 }
 export function <span class="fstat-no" title="function not covered" >handleSaveNote() {</span> <span class="cstat-no" title="statement not covered" >if (!state.editingNoteFor) <span class="cstat-no" title="statement not covered" >return; c</span></span>onst { habitId, date, time } = <span class="cstat-no" title="statement not covered" >state.editingNoteFor, v</span>al = <span class="cstat-no" title="statement not covered" >ui.notesTextarea.value.trim(), <span class="cstat-no" title="statement not covered" >i</span>nst = ensureHabitInstanceData(date, habitId, time); <span class="cstat-no" title="statement not covered" >i</span>f ((inst.note || '') !== val) { <span class="cstat-no" title="statement not covered" >inst.note = val || undefined; <span class="cstat-no" title="statement not covered" >s</span>tate.uiDirtyState.habitListStructure = true; <span class="cstat-no" title="statement not covered" >s</span>aveState(); <span class="cstat-no" title="statement not covered" >d</span>ocument.dispatchEvent(new CustomEvent('render-app')); }</span> <span class="cstat-no" title="statement not covered" >c</span>loseModal(ui.notesModal); }</span>
 export function <span class="fstat-no" title="function not covered" >setGoalOverride(h</span>abitId: string, d: string, t: TimeOfDay, v: number) { 
@@ -1410,7 +1410,7 @@ export function <span class="fstat-no" title="function not covered" >setGoalOver
              else { <span class="cstat-no" title="statement not covered" >if (currentStatus !== HABIT_STATE.DONE) <span class="cstat-no" title="statement not covered" >HabitService.setStatus(habitId, d, t, HABIT_STATE.DONE); }</span></span>
         }
 <span class="cstat-no" title="statement not covered" >        saveState(); <span class="cstat-no" title="statement not covered" >d</span>ocument.dispatchEvent(new CustomEvent('card-goal-changed', { detail: { habitId, time: t, date: d } })); <span class="cstat-no" title="statement not covered" >_</span>notifyPartialUIRefresh(d, [habitId]); </span>
-    } catch (e) { <span class="cstat-no" title="statement not covered" >console.error(e); } </span>
+    } catch (e) { <span class="cstat-no" title="statement not covered" >logger.error('setGoalOverride failed', e); } </span>
 }
 export function <span class="fstat-no" title="function not covered" >requestHabitTimeRemoval(h</span>abitId: string, time: TimeOfDay) {
 <span class="cstat-no" title="statement not covered" >    if (!state.initialSyncDone) <span class="cstat-no" title="statement not covered" >return;</span></span>
@@ -1465,7 +1465,7 @@ export function <span class="fstat-no" title="function not covered" >consumeAndF
             <div class='footer quiet pad2 space-top1 center small'>
                 Code coverage generated by
                 <a href="https://istanbul.js.org/" target="_blank" rel="noopener noreferrer">istanbul</a>
-                at 2026-01-30T02:11:23.866Z
+                at 2026-01-30T14:44:55.660Z
             </div>
         <script src="../../prettify.js"></script>
         <script>

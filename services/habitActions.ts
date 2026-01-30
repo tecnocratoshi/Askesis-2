@@ -26,7 +26,7 @@ import {
 } from './selectors';
 import { 
     generateUUID, getTodayUTCIso, parseUTCIsoDate, triggerHaptic,
-    getSafeDate, addDays, toUTCIsoDateString
+    getSafeDate, addDays, toUTCIsoDateString, logger
 } from '../utils';
 import { 
     closeModal, showConfirmationModal, renderAINotificationState,
@@ -222,7 +222,7 @@ const _applyHabitDeletion = async () => {
         });
         state.unarchivedCache.clear();
         saveState();
-    }).catch(e => console.error("Archive pruning failed", e));
+    }).catch(e => logger.error("Archive pruning failed", e));
 
     _notifyChanges(true, true);
     ActionContext.reset();
@@ -244,7 +244,7 @@ export function performArchivalCheck() {
             const up = await runWorkerTask<Record<string, string>>('archive', buckets);
             Object.keys(up).forEach(y => { state.archives[y] = up[y]; state.unarchivedCache.delete(y); Object.keys(buckets[y].additions).forEach(k => delete state.dailyData[k]); });
             await saveState();
-        } catch (e) { console.error(e); }
+        } catch (e) { logger.error('Archive worker failed', e); }
     };
     if ('requestIdleCallback' in window) requestIdleCallback(() => run()); else setTimeout(run, 5000);
 }
@@ -398,7 +398,7 @@ export function graduateHabit(habitId: string) { if (!state.initialSyncDone) ret
 export async function resetApplicationData() { 
     state.habits = []; state.dailyData = {}; state.archives = {}; state.notificationsShown = []; state.pending21DayHabitIds = []; state.pendingConsolidationHabitIds = []; state.monthlyLogs = new Map();
     document.dispatchEvent(new CustomEvent('render-app'));
-    try { await clearLocalPersistence(); } catch (e) { console.error(e); } finally { clearKey(); window.location.reload(); } 
+    try { await clearLocalPersistence(); } catch (e) { logger.error('Clear persistence failed', e); } finally { clearKey(); window.location.reload(); } 
 }
 export function handleSaveNote() { if (!state.editingNoteFor) return; const { habitId, date, time } = state.editingNoteFor, val = ui.notesTextarea.value.trim(), inst = ensureHabitInstanceData(date, habitId, time); if ((inst.note || '') !== val) { inst.note = val || undefined; state.uiDirtyState.habitListStructure = true; saveState(); document.dispatchEvent(new CustomEvent('render-app')); } closeModal(ui.notesModal); }
 export function setGoalOverride(habitId: string, d: string, t: TimeOfDay, v: number) { 
@@ -415,7 +415,7 @@ export function setGoalOverride(habitId: string, d: string, t: TimeOfDay, v: num
              else { if (currentStatus !== HABIT_STATE.DONE) HabitService.setStatus(habitId, d, t, HABIT_STATE.DONE); }
         }
         saveState(); document.dispatchEvent(new CustomEvent('card-goal-changed', { detail: { habitId, time: t, date: d } })); _notifyPartialUIRefresh(d, [habitId]); 
-    } catch (e) { console.error(e); } 
+    } catch (e) { logger.error('setGoalOverride failed', e); } 
 }
 export function requestHabitTimeRemoval(habitId: string, time: TimeOfDay) {
     if (!state.initialSyncDone) return;

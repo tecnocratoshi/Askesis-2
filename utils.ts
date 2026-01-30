@@ -115,7 +115,7 @@ export async function decompressFromBuffer(compressed: Uint8Array | ArrayBuffer)
         const response = new Response(decompressedStream);
         return await response.text();
     } catch (e) {
-        console.error("Binary Decompression failed", e);
+        logger.error("Binary Decompression failed", e);
         throw new Error("Failed to decompress binary data.");
     }
 }
@@ -258,6 +258,25 @@ const MD_REPLACER = (match: string, g1: string, c1: string, g2: string, c2: stri
 function formatInline(line: string): string { return escapeHTML(line).replace(MD_INLINE_COMBINED_REGEX, MD_REPLACER); }
 
 const MD_H3_REGEX = /^### /;
+
+// --- Logger (Dev Only) ---
+const SHOULD_LOG = typeof process !== 'undefined' && !!process.env && process.env.NODE_ENV !== 'production';
+export const logger = {
+    info: (message: string, data?: unknown) => {
+        if (!SHOULD_LOG) return;
+        if (data !== undefined) console.log(message, data);
+        else console.log(message);
+    },
+    warn: (message: string, data?: unknown) => {
+        if (!SHOULD_LOG) return;
+        if (data !== undefined) console.warn(message, data);
+        else console.warn(message);
+    },
+    error: (message: string, data?: unknown) => {
+        if (data !== undefined) console.error(message, data);
+        else console.error(message);
+    }
+};
 const MD_H2_REGEX = /^## /;
 const MD_H1_REGEX = /^# /;
 const MD_UL_REGEX = /^[*+-\s] /; 

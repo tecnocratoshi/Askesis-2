@@ -8,6 +8,7 @@
  * @description Inicializador de Estado e Sanitizador de Schema.
  */
 
+import { logger } from '../utils';
 import { AppState } from '../state';
 
 /**
@@ -79,7 +80,7 @@ export function migrateState(loadedState: any, targetVersion: number): AppState 
                 return [k, val];
             }));
         } catch (e) {
-            console.warn("[Migration] Failed to hydrate monthlyLogs", e);
+            logger.warn("[Migration] Failed to hydrate monthlyLogs", e);
             state.monthlyLogs = new Map();
         }
     } else if (!state.monthlyLogs) {
@@ -88,12 +89,12 @@ export function migrateState(loadedState: any, targetVersion: number): AppState 
 
     // 3. SCHEMA UPGRADE: V8 -> V9 (9-bit Bitmask Expansion)
     if (currentVersion < 9 && state.monthlyLogs.size > 0) {
-        console.info(`[Migration] Upgrading bitmasks from v${currentVersion} to v9...`);
+        logger.info(`[Migration] Upgrading bitmasks from v${currentVersion} to v9...`);
         try {
             state.monthlyLogs = migrateBitmasksV8toV9(state.monthlyLogs);
-            console.info("[Migration] Bitmask expansion successful.");
+            logger.info("[Migration] Bitmask expansion successful.");
         } catch (err) {
-            console.error("[Migration] Bitmask expansion failed!", err);
+            logger.error("[Migration] Bitmask expansion failed!", err);
         }
     }
 

@@ -21,7 +21,7 @@
  */
 
 import { state, TimeOfDay, LANGUAGES } from './state';
-import { pushToOneSignal } from './utils';
+import { pushToOneSignal, logger } from './utils';
 
 // INTERFACE ABSTRATA: Permite que o cache aceite tanto a classe nativa quanto o mock de fallback sem erros de tipo.
 interface ListFormatter {
@@ -133,17 +133,17 @@ function loadLanguage(langCode: string): Promise<boolean> {
             return true;
         } catch (error) {
             clearTimeout(timeoutId);
-            console.error(`Could not load translations for ${langCode}:`, error);
+            logger.error(`Could not load translations for ${langCode}:`, error);
             
             // Fallback Recovery: Garante que PT (base) esteja carregado para o fallbackDict
             // SECURITY: Evita recursão infinita se 'pt' também falhar.
             if (langCode !== 'pt' && !loadedTranslations['pt']) {
                 try {
                     // Tentativa única de carregar o fallback
-                    console.warn("Attempting to load fallback 'pt'");
+                    logger.warn("Attempting to load fallback 'pt'");
                     await loadLanguage('pt'); 
                 } catch (fallbackError) {
-                    console.error(`CRITICAL: Could not load fallback language 'pt'.`, fallbackError);
+                    logger.error(`CRITICAL: Could not load fallback language 'pt'.`, fallbackError);
                 }
             }
             return false;
@@ -509,6 +509,6 @@ export async function setLanguage(langCode: 'pt' | 'en' | 'es') {
 
         document.dispatchEvent(new CustomEvent('language-changed'));
     } else {
-        console.warn(`setLanguage aborted: Failed to load ${langCode}`);
+        logger.warn(`setLanguage aborted: Failed to load ${langCode}`);
     }
 }

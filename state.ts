@@ -8,7 +8,7 @@
  * @description Definição do Estado Global e Estruturas de Dados (Single Source of Truth).
  */
 
-import { getTodayUTCIso, parseUTCIsoDate, toUTCIsoDateString } from './utils';
+import { getTodayUTCIso, parseUTCIsoDate, toUTCIsoDateString, logger } from './utils';
 
 // --- TYPES & INTERFACES ---
 
@@ -340,7 +340,7 @@ export function pruneHabitAppearanceCache(): void {
             }
         });
     } catch (error) {
-        console.warn('[Cache] Error pruning habitAppearanceCache:', error);
+        logger.warn('[Cache] Error pruning habitAppearanceCache:', error);
     }
 }
 
@@ -365,6 +365,6 @@ export function pruneStreaksCache(): void {
             }
         });
     } catch (error) {
-        console.warn('[Cache] Error pruning streaksCache:', error);
+        logger.warn('[Cache] Error pruning streaksCache:', error);
     }
 }

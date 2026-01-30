@@ -10,7 +10,7 @@
 
 import { AppState, state, getPersistableState } from '../state';
 import { loadState, persistStateLocally } from './persistence';
-import { pushToOneSignal, generateUUID, createDebounced } from '../utils';
+import { pushToOneSignal, generateUUID, createDebounced, logger } from '../utils';
 import { ui } from '../render/ui';
 import { t } from '../i18n';
 import { hasLocalSyncKey, getSyncKey, apiFetch } from './api';
@@ -50,7 +50,7 @@ function getWorker(): Worker {
         };
         
         syncWorker.onerror = (e) => {
-            console.error("Critical Worker Error:", e);
+            logger.error("Critical Worker Error:", e);
         };
     }
     return syncWorker;
@@ -101,7 +101,7 @@ const lastSyncedHashes: Map<string, string> = (() => {
             return loaded;
         }
     } catch (e) {
-        console.warn("[Sync] Falha ao carregar cache de hashes", e);
+        logger.warn("[Sync] Falha ao carregar cache de hashes", e);
     }
     return new Map();
 })();
@@ -114,7 +114,7 @@ function persistHashCache() {
         pruneHashCache();
         localStorage.setItem(HASH_STORAGE_KEY, JSON.stringify(Array.from(lastSyncedHashes.entries())));
     } catch (e) {
-        console.error("[Sync] Falha ao salvar cache de hashes", e);
+        logger.error("[Sync] Falha ao salvar cache de hashes", e);
     }
 }
 
@@ -130,7 +130,7 @@ function pruneHashCache() {
 export function clearSyncHashCache() {
     lastSyncedHashes.clear();
     localStorage.removeItem(HASH_STORAGE_KEY);
-    console.debug("[Sync] Hash cache cleared.");
+    logger.info("[Sync] Hash cache cleared.");
 }
 
 function murmurHash3(key: string, seed: number = 0): string {
@@ -164,7 +164,7 @@ export function addSyncLog(msg: string, type: 'success' | 'error' | 'info' = 'in
     if (!state.syncLogs) state.syncLogs = [];
     state.syncLogs.push({ time: Date.now(), msg, type, icon });
     pruneSyncLogs();
-    console.debug(`[Sync Log] ${msg}`);
+    logger.info(`[Sync Log] ${msg}`);
 }
 
 function pruneSyncLogs() {
@@ -203,7 +203,7 @@ async function resolveConflictWithServerState(serverShards: Record<string, strin
                 const decrypted = await runWorkerTask<any>('decrypt', serverShards[key], syncKey);
                 remoteShards[key] = decrypted;
             } catch (err) {
-                console.warn(`[Sync] Failed to decrypt shard ${key}, skipping.`, err);
+                logger.warn(`[Sync] Failed to decrypt shard ${key}, skipping.`, err);
             }
         }
 
@@ -330,7 +330,7 @@ async function reconstructStateFromShards(shards: Record<string, string>): Promi
                 decryptedShards[key] = await runWorkerTask<any>('decrypt', shards[key], syncKey);
                 lastSyncedHashes.set(key, murmurHash3(JSON.stringify(decryptedShards[key])));
             } catch (e) {
-                console.warn(`[Sync] Skip decrypt ${key}`, e);
+                logger.warn(`[Sync] Skip decrypt ${key}`, e);
             }
         }
         
@@ -355,7 +355,7 @@ async function reconstructStateFromShards(shards: Record<string, string>): Promi
         }
         return result;
     } catch (e) {
-        console.error("State reconstruction failed:", e);
+        logger.error("State reconstruction failed:", e);
         return undefined;
     }
 }
@@ -412,7 +412,7 @@ export async function fetchStateFromCloud(): Promise<AppState | undefined> {
         }
         return remoteState;
     } catch (error) {
-        console.warn("[Cloud] Boot sync failed (Offline or Error). Proceeding locally.", error);
+        logger.warn("[Cloud] Boot sync failed (Offline or Error). Proceeding locally.", error);
         setSyncStatus('syncError');
         return undefined;
     } finally {

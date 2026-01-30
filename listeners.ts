@@ -16,7 +16,7 @@ import { setupDragHandler } from './listeners/drag';
 import { setupSwipeHandler } from './listeners/swipe';
 import { setupCalendarListeners } from './listeners/calendar';
 import { setupChartListeners } from './listeners/chart';
-import { pushToOneSignal, getTodayUTCIso, resetTodayCache, createDebounced } from './utils';
+import { pushToOneSignal, getTodayUTCIso, resetTodayCache, createDebounced, logger } from './utils';
 import { state, getPersistableState } from './state';
 import { syncStateWithCloud } from './services/cloud';
 import { checkAndAnalyzeDayContext } from './services/analysis';
@@ -44,7 +44,7 @@ const _handleNetworkChange = createDebounced(() => {
     document.body.classList.toggle('is-offline', !isOnline);
     if (wasOffline === isOnline) renderAINotificationState();
     if (isOnline) {
-        console.log("[Network] Online stable. Flushing pending sync.");
+        logger.info('[Network] Online stable. Flushing pending sync.');
         syncStateWithCloud(getPersistableState());
     }
 }, NETWORK_DEBOUNCE_MS);
@@ -78,7 +78,7 @@ const _handleVisibilityChange = () => {
  */
 const _handleServiceWorkerMessage = (event: MessageEvent) => {
     if (event.data && event.data.type === 'REQUEST_SYNC') {
-        console.log("[SW Message] Sincronização solicitada pelo Service Worker.");
+        logger.info('[SW Message] Sincronização solicitada pelo Service Worker.');
         syncStateWithCloud(getPersistableState(), true);
     }
 };

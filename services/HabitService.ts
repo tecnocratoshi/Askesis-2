@@ -9,6 +9,7 @@
  */
 
 import { state, PERIOD_OFFSET, TimeOfDay } from '../state';
+import { logger } from '../utils';
 
 export class HabitService {
 
@@ -188,8 +189,8 @@ export class HabitService {
             try {
                 const hexClean = hexVal.startsWith("0x") ? hexVal : "0x" + hexVal;
                 state.monthlyLogs.set(key, BigInt(hexClean));
-            } catch (e) {
-                console.warn(`[HabitService] Skipping invalid hex log: ${key}`);
+                    } catch (e) {
+                        logger.warn(`[HabitService] Skipping invalid hex log: ${key}`);
             }
         });
         // Como estamos injetando dados externos, invalidamos o cache para garantir consistência.

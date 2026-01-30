@@ -5,7 +5,7 @@
 
 import { state, Habit, HabitSchedule, TimeOfDay, HABIT_STATE } from '../state';
 import { HabitService } from '../services/HabitService';
-import { getTodayUTCIso } from '../utils';
+import { generateUUID, getTodayUTCIso } from '../utils';
 
 export interface SimpleHabitData {
   name: string;
@@ -21,7 +21,7 @@ export interface SimpleHabitData {
  * Cria um hábito de teste com estrutura simplificada
  */
 export function createTestHabit(data: SimpleHabitData): string {
-  const habitId = `test-habit-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+  const habitId = generateUUID();
   
   const schedule: HabitSchedule = {
     startDate: getTodayUTCIso(),
@@ -123,7 +123,33 @@ export function clearTestState(): void {
   state.habits = [];
   state.monthlyLogs = new Map();
   state.dailyData = {};
-  state.lastModified = Date.now();
+  state.archives = {};
+  state.dailyDiagnoses = {};
+  state.lastModified = 0;
+  state.unarchivedCache = new Map();
+  state.streaksCache = new Map();
+  state.habitAppearanceCache = new Map();
+  state.scheduleCache = new Map();
+  state.activeHabitsCache = new Map();
+  state.daySummaryCache = new Map();
+  state.pending21DayHabitIds = [];
+  state.pendingConsolidationHabitIds = [];
+  state.notificationsShown = [];
+  state.hasOnboarded = false;
+  state.syncLogs = [];
+  state.quoteState = undefined;
+  state.selectedDate = getTodayUTCIso();
+  state.activeLanguageCode = 'pt';
+  state.aiState = 'idle';
+  state.aiReqId = 0;
+  state.hasSeenAIResult = true;
+  state.lastAIResult = null;
+  state.lastAIError = undefined;
+  state.syncState = 'syncInitial';
+  state.initialSyncDone = false;
+  state.fullCalendar = { year: new Date().getUTCFullYear(), month: new Date().getUTCMonth() };
+  state.uiDirtyState = { calendarVisuals: true, habitListStructure: true, chartData: true };
+  state.calendarDates = [];
   HabitService.resetCache();
 }
 

@@ -22,7 +22,7 @@
 
 ---
 
-## ⚠️ Ajustes Necessários
+## ⚠️ Ajustes Necessários (em andamento)
 
 Os testes foram criados com base na documentação do README, mas a estrutura real do código é ligeiramente diferente. Aqui estão os ajustes necessários:
 
@@ -37,6 +37,7 @@ import { addHabit, toggleHabitStatus, addNote, deleteHabit } from '../habitActio
 ```
 
 **Solução:** Ajustar os testes para usar as funções reais exportadas ou criar wrappers.
+**Status:** ✅ Camada de wrappers criada em tests/test-utils.ts.
 
 ### 2. **Estrutura do Tipo Habit**
 ```typescript
@@ -59,6 +60,7 @@ interface Habit {
 ```
 
 **Solução:** Adaptar os testes para trabalhar com `scheduleHistory`.
+**Status:** ✅ Ajustes aplicados nos helpers e cenários críticos (incl. injeção inválida/migração).
 
 ### 3. **Estado Global**
 ```typescript
@@ -69,6 +71,7 @@ state.currentDate = new Date('2024-01-15');
 ```
 
 **Solução:** Usar funções utilitárias como `getTodayUTCIso()` ou criar mock do estado.
+**Status:** ✅ Limpeza completa de estado e caches em clearTestState().
 
 ### 4. **Render Functions**
 ```typescript
@@ -80,6 +83,7 @@ export function renderHabits() // sem 'Card'
 ```
 
 **Solução:** Ajustar para usar as funções de render reais ou mockar o DOM.
+**Status:** ✅ Mock de DOM e cards via createTestHabitCard().
 
 ---
 
@@ -228,8 +232,9 @@ npm run test:coverage
 ✅ Documentação COMPLETA (README.md)
 ✅ Coverage configurado
 ✅ Scripts npm configurados
-⚠️  Testes precisam de ajustes de tipos (esperado)
-🔄 Próximo: Criar test-utils.ts e ajustar imports
+✅ test-utils.ts criado e alinhado ao estado real
+✅ Ajustes de tipos concluídos nos helpers e cenários críticos
+🔄 Próximo: Executar testes e iterar sobre falhas reais
 ```
 
 ---

@@ -56,12 +56,19 @@ class ChaosMonkey {
     // Dados estruturalmente válidos, mas semanticamente incorretos
     state.habits.push({
       id: 'invalid-habit',
-      name: '', // Nome vazio
-      category: 'invalid' as any, // Categoria inválida
-      frequency: 'never' as any, // Frequência inválida
-      time: 'InvalidTime' as any, // Turno inválido
-      targetType: 'unknown' as any,
-      createdAt: -1, // Timestamp negativo
+      createdOn: 'invalid-date',
+      scheduleHistory: [
+        {
+          startDate: 'invalid-date',
+          icon: '❌',
+          color: '#000000',
+          goal: { type: 'check' },
+          name: '', // Nome vazio
+          times: ['InvalidTime' as any], // Turno inválido
+          frequency: { type: 'never' as any }, // Frequência inválida
+          scheduleAnchor: 'invalid-date'
+        }
+      ]
     } as any);
   }
 
@@ -462,10 +469,14 @@ describe('🔥 SUPER-TESTE 5: Recuperação de Desastres', () => {
         createdOn: new Date().toISOString().split('T')[0],
         scheduleHistory: [
           {
+            startDate: new Date().toISOString().split('T')[0],
             name: h.name,
-            frequency: { type: 'daily', times: 1 },
+            frequency: { type: 'daily' },
             times: ['Morning'] as const,
-            goalType: 'check',
+            goal: { type: 'check' },
+            scheduleAnchor: new Date().toISOString().split('T')[0],
+            icon: '⭐',
+            color: '#3498db'
           },
         ],
       })),

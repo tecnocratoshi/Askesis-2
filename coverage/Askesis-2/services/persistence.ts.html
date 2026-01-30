@@ -25,28 +25,28 @@
             <div class='fl pad1y space-right2'>
                 <span class="strong">0% </span>
                 <span class="quiet">Statements</span>
-                <span class='fraction'>0/170</span>
+                <span class='fraction'>0/171</span>
             </div>
         
             
             <div class='fl pad1y space-right2'>
                 <span class="strong">0% </span>
                 <span class="quiet">Branches</span>
-                <span class='fraction'>0/75</span>
+                <span class='fraction'>0/77</span>
             </div>
         
             
             <div class='fl pad1y space-right2'>
                 <span class="strong">0% </span>
                 <span class="quiet">Functions</span>
-                <span class='fraction'>0/33</span>
+                <span class='fraction'>0/32</span>
             </div>
         
             
             <div class='fl pad1y space-right2'>
                 <span class="strong">0% </span>
                 <span class="quiet">Lines</span>
-                <span class='fraction'>0/148</span>
+                <span class='fraction'>0/150</span>
             </div>
         
             
@@ -340,7 +340,12 @@
 <a name='L275'></a><a href='#L275'>275</a>
 <a name='L276'></a><a href='#L276'>276</a>
 <a name='L277'></a><a href='#L277'>277</a>
-<a name='L278'></a><a href='#L278'>278</a></td><td class="line-coverage quiet"><span class="cline-any cline-neutral">&nbsp;</span>
+<a name='L278'></a><a href='#L278'>278</a>
+<a name='L279'></a><a href='#L279'>279</a>
+<a name='L280'></a><a href='#L280'>280</a>
+<a name='L281'></a><a href='#L281'>281</a>
+<a name='L282'></a><a href='#L282'>282</a>
+<a name='L283'></a><a href='#L283'>283</a></td><td class="line-coverage quiet"><span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
@@ -355,6 +360,7 @@
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-no">&nbsp;</span>
 <span class="cline-any cline-no">&nbsp;</span>
 <span class="cline-any cline-no">&nbsp;</span>
@@ -577,6 +583,7 @@
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
 <span class="cline-any cline-no">&nbsp;</span>
 <span class="cline-any cline-no">&nbsp;</span>
 <span class="cline-any cline-no">&nbsp;</span>
@@ -586,7 +593,10 @@
 <span class="cline-any cline-no">&nbsp;</span>
 <span class="cline-any cline-no">&nbsp;</span>
 <span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-no">&nbsp;</span>
@@ -627,10 +637,11 @@
  * @description Camada de Persistência e Gerenciamento de Ciclo de Vida de Dados (Storage Engine).
  */
 &nbsp;
-import { state, AppState, Habit, HabitDailyInfo, APP_VERSION, getPersistableState } from '../state';
+import { state, AppState, Habit, HabitDailyInfo, APP_VERSION, getPersistableState, clearAllCaches } from '../state';
 import { migrateState } from './migration';
 import { HabitService } from './HabitService';
 import { clearHabitDomCache } from '../render';
+import { logger } from '../utils';
 &nbsp;
 const DB_NAME = <span class="cstat-no" title="statement not covered" >'AskesisDB', D</span>B_VERSION = <span class="cstat-no" title="statement not covered" >1, S</span>TORE_NAME = <span class="cstat-no" title="statement not covered" >'app_state';</span>
 const STATE_JSON_KEY = <span class="cstat-no" title="statement not covered" >'askesis_core_json';</span>
@@ -719,7 +730,7 @@ async function <span class="fstat-no" title="function not covered" >saveStateInt
 <span class="cstat-no" title="statement not covered" >        try {</span>
 <span class="cstat-no" title="statement not covered" >            await saveSplitState(structuredData);</span>
         } catch (e) { 
-<span class="cstat-no" title="statement not covered" >            console.error("IDB Save Failed:", e); </span>
+<span class="cstat-no" title="statement not covered" >            logger.error("IDB Save Failed:", e); </span>
         }
         
 <span class="cstat-no" title="statement not covered" >        if (!suppressSync) {</span>
@@ -796,7 +807,7 @@ export const persistStateLocally = <span class="cstat-no" title="statement not c
 <span class="cstat-no" title="statement not covered" >    try {</span>
 <span class="cstat-no" title="statement not covered" >        await saveSplitState(data);</span>
     } catch (e) {
-<span class="cstat-no" title="statement not covered" >        console.error("[Persistence] Immediate Cloud Persistence Failed:", e);</span>
+<span class="cstat-no" title="statement not covered" >        logger.error("[Persistence] Immediate Cloud Persistence Failed:", e);</span>
     }
 };
 &nbsp;
@@ -823,7 +834,7 @@ export async function <span class="fstat-no" title="function not covered" >loadS
 <span class="cstat-no" title="statement not covered" >                tx.onerror = <span class="fstat-no" title="function not covered" >() =&gt; <span class="cstat-no" title="statement not covered" >r</span>esolve();</span></span>
             });
         } catch (e) {
-<span class="cstat-no" title="statement not covered" >            console.warn("[Persistence] Failed to read state from IDB", e);</span>
+<span class="cstat-no" title="statement not covered" >            logger.warn("[Persistence] Failed to read state from IDB", e);</span>
         }
     }
 &nbsp;
@@ -865,8 +876,12 @@ export async function <span class="fstat-no" title="function not covered" >loadS
 <span class="cstat-no" title="statement not covered" >        state.hasOnboarded = migrated.hasOnboarded ?? true;</span>
 <span class="cstat-no" title="statement not covered" >        state.syncLogs = migrated.syncLogs || [];</span>
 &nbsp;
+<span class="cstat-no" title="statement not covered" >        if (state.syncLogs.length &gt; 50) {</span>
+<span class="cstat-no" title="statement not covered" >            state.syncLogs = state.syncLogs.slice(-50);</span>
+        }
+&nbsp;
         // Clear Caches
-<span class="cstat-no" title="statement not covered" >        ['streaksCache', 'scheduleCache', 'activeHabitsCache', 'unarchivedCache', 'habitAppearanceCache', 'daySummaryCache'].forEach(<span class="fstat-no" title="function not covered" >k =&gt; (<span class="cstat-no" title="statement not covered" >s</span>tate as any)[k].clear())</span>;</span>
+<span class="cstat-no" title="statement not covered" >        clearAllCaches();</span>
         
 <span class="cstat-no" title="statement not covered" >        clearHabitDomCache();</span>
 <span class="cstat-no" title="statement not covered" >        Object.assign(state.uiDirtyState, { calendarVisuals: true, habitListStructure: true, chartData: true });</span>
@@ -890,7 +905,7 @@ export const clearLocalPersistence = <span class="cstat-no" title="statement not
 <span class="cstat-no" title="statement not covered" >        tx.objectStore(STORE_NAME).clear();</span>
 <span class="cstat-no" title="statement not covered" >        await new Promise(<span class="fstat-no" title="function not covered" >r =&gt; <span class="cstat-no" title="statement not covered" >t</span>x.oncomplete = r)</span>;</span>
     } catch (e) {
-<span class="cstat-no" title="statement not covered" >        console.warn("IDB clear failed", e);</span>
+<span class="cstat-no" title="statement not covered" >        logger.warn("IDB clear failed", e);</span>
     }
     // Use HabitService to clear logs and cache consistently
 <span class="cstat-no" title="statement not covered" >    HabitService.clearAllLogs();</span>
@@ -901,7 +916,7 @@ export const clearLocalPersistence = <span class="cstat-no" title="statement not
             <div class='footer quiet pad2 space-top1 center small'>
                 Code coverage generated by
                 <a href="https://istanbul.js.org/" target="_blank" rel="noopener noreferrer">istanbul</a>
-                at 2026-01-30T02:11:23.866Z
+                at 2026-01-30T14:44:55.660Z
             </div>
         <script src="../../prettify.js"></script>
         <script>

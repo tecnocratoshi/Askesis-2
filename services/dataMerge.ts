@@ -9,6 +9,7 @@
  */
 
 import { AppState, HabitDailyInfo, Habit, HabitSchedule } from '../state';
+import { logger } from '../utils';
 import { HabitService } from './HabitService';
 
 function isValidBigIntString(value: string): boolean {
@@ -54,14 +55,14 @@ function hydrateLogs(appState: AppState) {
                 if (val && typeof val === 'object' && val.__type === 'bigint') {
                     const hydrated = safeBigIntFromUnknown(val.val);
                     if (hydrated !== null) map.set(key, hydrated);
-                    else console.warn(`[Merge] Invalid bigint value for ${key}`);
+                    else logger.warn(`[Merge] Invalid bigint value for ${key}`);
                 } else {
                     const hydrated = safeBigIntFromUnknown(val);
                     if (hydrated !== null) map.set(key, hydrated);
-                    else console.warn(`[Merge] Invalid bigint value for ${key}`);
+                    else logger.warn(`[Merge] Invalid bigint value for ${key}`);
                 }
             } catch(e) {
-                console.warn(`[Merge] Failed to hydrate bitmask for ${key}`, e);
+                logger.warn(`[Merge] Failed to hydrate bitmask for ${key}`, e);
             }
         });
         (appState as any).monthlyLogs = map;
