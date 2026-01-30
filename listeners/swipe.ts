@@ -103,14 +103,14 @@ const _updateVisuals = () => {
     const maxReveal = SwipeState.actionWidth;
     if (absTx > maxReveal) {
         const over = absTx - maxReveal;
-        const resisted = maxReveal + over * 0.10;
+        const resisted = maxReveal + over * 0.08;
         tx = (tx < 0 ? -resisted : resisted) | 0;
 
-        const stepSize = SwipeState.actionWidth * 0.10;
+        const stepSize = SwipeState.actionWidth * 0.08;
         const step = Math.floor(over / stepSize);
         if (step > SwipeState.overshootStep) {
-            if (step >= 3) triggerHaptic('heavy');
-            else if (step === 2) triggerHaptic('medium');
+            if (step >= 4) triggerHaptic('heavy');
+            else if (step === 3) triggerHaptic('medium');
             else triggerHaptic('light');
             SwipeState.overshootStep = step;
         }
@@ -168,7 +168,8 @@ const _handlePointerMove = (e: PointerEvent) => {
             if (dx > dy) {
                 // Horizontal swipe confirmed
                 SwipeState.direction = DIR_HORIZ;
-            SwipeState.startX = SwipeState.currentX;
+                const sign = SwipeState.currentX >= SwipeState.startX ? 1 : -1;
+                SwipeState.startX = (SwipeState.startX + (INTENT_THRESHOLD * sign)) | 0;
                 SwipeState.isActive = 1;
                 document.body.classList.add('is-interaction-active');
                 SwipeState.card.classList.add(CSS_CLASSES.IS_SWIPING);
@@ -205,7 +206,7 @@ const _handlePointerMove = (e: PointerEvent) => {
 const _handlePointerUp = () => {
     if (SwipeState.card && SwipeState.direction === DIR_HORIZ) {
         const dx = (SwipeState.currentX - SwipeState.startX) | 0;
-        const threshold = Math.max(ACTION_THRESHOLD, SwipeState.actionWidth * 0.45);
+        const threshold = Math.max(ACTION_THRESHOLD, SwipeState.actionWidth * 0.55);
         const didChange = _finalizeSwipeState(dx > 0 ? threshold <= dx ? dx : 0 : threshold <= -dx ? dx : 0);
         if (didChange) triggerHaptic('light');
         _blockSubsequentClick(dx);
