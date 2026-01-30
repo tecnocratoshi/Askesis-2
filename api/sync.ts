@@ -104,7 +104,22 @@ export default async function handler(req: Request) {
                 return new Response(JSON.stringify({ error: 'Invalid or missing shards' }), { status: 400, headers: HEADERS_BASE });
             }
 
-            const result = await kv.eval(LUA_SHARDED_UPDATE, [dataKey], [String(lastModified), JSON.stringify(shards)]) as [string, any?];
+            const lastModifiedNum = Number(lastModified);
+            if (!Number.isFinite(lastModifiedNum)) {
+                return new Response(JSON.stringify({ error: 'Invalid lastModified', code: 'INVALID_TS' }), { status: 400, headers: HEADERS_BASE });
+            }
+
+            for (const [shardName, shardValue] of Object.entries(shards)) {
+                if (typeof shardValue !== 'string') {
+                    return new Response(JSON.stringify({ error: 'Invalid shard type', code: 'INVALID_SHARD_TYPE', detail: shardName, detailType: typeof shardValue }), { status: 400, headers: HEADERS_BASE });
+                }
+            }
+
+            const result = await kv.eval(LUA_SHARDED_UPDATE, [dataKey], [String(lastModifiedNum), JSON.stringify(shards)]) as any;
+
+            if (!Array.isArray(result)) {
+                return new Response(JSON.stringify({ error: 'Lua Execution Error', code: 'LUA_NON_ARRAY', detail: String(result), raw: result }), { status: 400, headers: HEADERS_BASE });
+            }
             
             if (result[0] === 'OK') return new Response('{"success":true}', { status: 200, headers: HEADERS_BASE });
             
