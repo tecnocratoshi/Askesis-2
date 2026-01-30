@@ -91,10 +91,27 @@ function createDayElement(dateISO: string, isSelected: boolean, isToday: boolean
 export function updateDayVisuals(dateISO: string) {
     if (!ui.calendarStrip) return;
     
-    const entry = dayElementCache.get(dateISO);
-    
-    if (entry) {
-        applyDayVisuals(entry.el, dateISO, undefined, entry.ringEl, entry.numEl);
+    let entry = dayElementCache.get(dateISO);
+    if (!entry || !entry.el.isConnected) {
+        const el = ui.calendarStrip.querySelector(`[data-date="${dateISO}"]`) as HTMLElement | null;
+        if (el) {
+            const ringEl = el.querySelector(`.${CSS_CLASSES.DAY_PROGRESS_RING}`) as HTMLElement;
+            const numEl = ringEl?.firstElementChild as HTMLElement;
+            entry = ringEl && numEl ? { el, ringEl, numEl } : undefined;
+            if (entry) dayElementCache.set(dateISO, entry);
+        }
+    }
+
+    if (entry) applyDayVisuals(entry.el, dateISO, undefined, entry.ringEl, entry.numEl);
+
+    // Atualiza também o calendário completo (almanac), se estiver aberto/renderizado
+    if (ui.fullCalendarGrid && ui.fullCalendarGrid.children.length > 0) {
+        const fullEl = ui.fullCalendarGrid.querySelector(`[data-date="${dateISO}"]`) as HTMLElement | null;
+        if (fullEl) {
+            const ring = fullEl.firstElementChild as HTMLElement;
+            const num = ring?.firstElementChild as HTMLElement;
+            if (ring && num) applyDayVisuals(fullEl, dateISO, undefined, ring, num);
+        }
     }
 }
 
