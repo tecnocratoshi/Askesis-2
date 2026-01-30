@@ -16,6 +16,10 @@ local shardsJson = ARGV[2]
 
 local currentTs = tonumber(redis.call("HGET", key, "lastModified") or 0)
 
+if not newTs then
+    return { "ERROR", "INVALID_TS" }
+end
+
 -- Optimistic Concurrency Control
 if newTs < currentTs then
     local all = redis.call("HGETALL", key)
@@ -25,13 +29,15 @@ end
 -- Robust JSON Parsing
 local status, shards = pcall(cjson.decode, shardsJson)
 if not status then
-    return { "ERROR", "Invalid JSON in shards" }
+    return { "ERROR", "INVALID_JSON" }
 end
 
 -- Atomic Shard Update
 for shardName, shardData in pairs(shards) do
     if type(shardData) == "string" then
         redis.call("HSET", key, shardName, shardData)
+    else
+        return { "ERROR", "INVALID_SHARD_TYPE", shardName, type(shardData) }
     end
 end
 
@@ -111,7 +117,7 @@ export default async function handler(req: Request) {
                 return new Response(JSON.stringify(conflictShards), { status: 409, headers: HEADERS_BASE });
             }
             
-            return new Response(JSON.stringify({ error: result[1] || 'Lua Execution Error' }), { status: 400, headers: HEADERS_BASE });
+            return new Response(JSON.stringify({ error: 'Lua Execution Error', code: result[1] || 'UNKNOWN', detail: result[2], detailType: result[3] }), { status: 400, headers: HEADERS_BASE });
         }
 
         return new Response(null, { status: 405 });

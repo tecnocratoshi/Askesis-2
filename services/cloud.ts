@@ -319,8 +319,10 @@ async function performSync() {
             persistHashCache();
             document.dispatchEvent(new CustomEvent('habitsChanged')); 
         } else {
-            const errorData = await response.json().catch(() => ({}));
-            throw new Error(errorData.error || `Erro ${response.status}`);
+            const errorData = await response.json().catch(() => ({} as any));
+            const code = errorData.code ? ` [${errorData.code}]` : '';
+            const detail = errorData.detail ? ` (${errorData.detail}${errorData.detailType ? `:${errorData.detailType}` : ''})` : '';
+            throw new Error((errorData.error || `Erro ${response.status}`) + code + detail);
         }
     } catch (error: any) {
         addSyncLog(`Falha no envio: ${error.message}`, "error");
@@ -396,7 +398,12 @@ export async function downloadRemoteState(): Promise<AppState | undefined> {
     addSyncLog("Baixando dados remotos...", "info");
     const response = await apiFetch('/api/sync', {}, true);
     if (response.status === 304) { addSyncLog("Sem novidades na nuvem.", "info"); return undefined; }
-    if (!response.ok) throw new Error("Falha na conexão com a nuvem");
+    if (!response.ok) {
+        const errorData = await response.json().catch(() => ({} as any));
+        const code = errorData.code ? ` [${errorData.code}]` : '';
+        const detail = errorData.detail ? ` (${errorData.detail}${errorData.detailType ? `:${errorData.detailType}` : ''})` : '';
+        throw new Error((errorData.error || "Falha na conexão com a nuvem") + code + detail);
+    }
     const shards = await response.json();
     if (!shards || Object.keys(shards).length === 0) { addSyncLog("Cofre vazio na nuvem.", "info"); return undefined; }
     addSyncLog("Dados baixados com sucesso.", "success");
