@@ -122,6 +122,10 @@ export default async function handler(req: Request) {
             }
             
             if (result[0] === 'OK') return new Response('{"success":true}', { status: 200, headers: HEADERS_BASE });
+
+            if (typeof result[0] === 'number') {
+                return new Response(JSON.stringify({ error: 'Lua Execution Error', code: 'LUA_NUMERIC_RETURN', detail: String(result[0]), raw: result }), { status: 400, headers: HEADERS_BASE });
+            }
             
             if (result[0] === 'CONFLICT') {
                 const rawList = result[1] as string[];
