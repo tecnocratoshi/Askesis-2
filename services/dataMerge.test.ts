@@ -83,7 +83,7 @@ class DistributedCluster {
         if (clients.length <= 1) return true;
 
         const first = JSON.stringify({
-            habits: clients[0].state.habits.sort((a, b) => a.id.localeCompare(b.id)),
+            habits: [...clients[0].state.habits].sort((a, b) => a.id.localeCompare(b.id)),
             monthlyLogs: Array.from(clients[0].state.monthlyLogs)
                 .map(([k, v]) => [k, v.toString()])
                 .sort((a, b) => a[0].localeCompare(b[0]))
@@ -91,7 +91,7 @@ class DistributedCluster {
 
         for (let i = 1; i < clients.length; i++) {
             const current = JSON.stringify({
-                habits: clients[i].state.habits.sort((a, b) => a.id.localeCompare(b.id)),
+                habits: [...clients[i].state.habits].sort((a, b) => a.id.localeCompare(b.id)),
                 monthlyLogs: Array.from(clients[i].state.monthlyLogs)
                     .map(([k, v]) => [k, v.toString()])
                     .sort((a, b) => a[0].localeCompare(b[0]))
