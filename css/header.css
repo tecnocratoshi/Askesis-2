@@ -39,6 +39,7 @@
 /* ALIGNMENT FIX [2025-06-04]: Raise calendar strip by 10px to better align with FAB */
 .calendar-strip {
     margin-bottom: 10px;
+    margin-right: calc(var(--space-sm) * -1);
 }
 
 /* TABLET/DESKTOP ADJUSTMENT [2025-05-15]: Aumenta o espaço entre o botão de adicionar e o calendário. */
