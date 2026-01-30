@@ -104,6 +104,12 @@ export function migrateState(loadedState: any, targetVersion: number): AppState 
 
     if (!state.syncLogs) {
         (state as any).syncLogs = [];
+    } else {
+        (state as any).syncLogs = state.syncLogs.map((log: any) => ({
+            time: log.time,
+            msg: log.msg,
+            type: log.type
+        }));
     }
 
     // Force target version

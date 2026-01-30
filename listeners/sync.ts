@@ -53,7 +53,7 @@ async function _processKey(key: string) {
         // SEGURANÇA: Só carregamos se houver hábitos na nuvem.
         // Se a nuvem estiver vazia, forçamos um PUSH dos dados locais para não perder o progresso atual.
         if (cloudState && cloudState.habits && cloudState.habits.length > 0) {
-            addSyncLog("Dados encontrados na nuvem. Mesclando...", "info", "🧬");
+            addSyncLog("Dados encontrados na nuvem. Mesclando...", "info");
             const localState = getPersistableState();
             const mergedState = await mergeStates(localState, cloudState);
             await loadState(mergedState);
@@ -65,7 +65,7 @@ async function _processKey(key: string) {
             setSyncStatus('syncSynced');
             syncStateWithCloud(mergedState, true);
         } else {
-            addSyncLog("Cofre nuvem vazio. Inicializando com dados locais.", "info", "⬆️");
+            addSyncLog("Cofre nuvem vazio. Inicializando com dados locais.", "info");
             setSyncStatus('syncSynced');
             syncStateWithCloud(getPersistableState(), true);
         }
@@ -80,7 +80,7 @@ async function _processKey(key: string) {
             ui.syncErrorMsg.classList.remove('hidden');
         }
         setSyncStatus('syncError');
-        addSyncLog(`Falha na ativação: ${error.message}`, "error", "❌");
+        addSyncLog(`Falha na ativação: ${error.message}`, "error");
     } finally {
         ui.submitKeyBtn.textContent = originalBtnText;
         _toggleButtons(buttons, false);

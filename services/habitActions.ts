@@ -12,7 +12,7 @@ import {
     state, Habit, HabitSchedule, TimeOfDay, ensureHabitDailyInfo, 
     ensureHabitInstanceData, clearScheduleCache,
     clearActiveHabitsCache, invalidateCachesForDateChange, getPersistableState,
-    HabitDayData, STREAK_SEMI_CONSOLIDATED, STREAK_CONSOLIDATED,
+    HabitDayData, STREAK_SEMI_CONSOLIDATED, STREAK_CONSOLIDATED, MAX_HABIT_NAME_LENGTH,
     getHabitDailyInfoForDate, AppState, HABIT_STATE,
     pruneHabitAppearanceCache, pruneStreaksCache
 } from '../state';
@@ -260,7 +260,12 @@ export function reorderHabit(movedHabitId: string, targetHabitId: string, pos: '
 export function saveHabitFromModal() {
     if (!state.editingHabit) return;
     const { isNew, habitId, formData, targetDate } = state.editingHabit;
-    if (formData.name) formData.name = formData.name.replace(/[<>{}]/g, '').trim();
+    if (formData.name) {
+        formData.name = formData.name.replace(/[<>{}]/g, '').trim();
+        if (formData.name.length > MAX_HABIT_NAME_LENGTH) {
+            formData.name = formData.name.slice(0, MAX_HABIT_NAME_LENGTH);
+        }
+    }
     const nameToUse = formData.nameKey ? t(formData.nameKey) : formData.name!;
     if (!nameToUse) return;
     const cleanFormData = {
@@ -305,8 +310,8 @@ export async function performAIAnalysis(type: 'monthly' | 'quarterly' | 'histori
         if (id !== state.aiReqId) return;
         const res = await apiFetch('/api/analyze', { method: 'POST', body: JSON.stringify({ prompt, systemInstruction }) });
         if (!res.ok) throw new Error(`AI request failed (${res.status})`);
-        if (id === state.aiReqId) { state.lastAIResult = await res.text(); state.aiState = 'completed'; addSyncLog("Análise IA concluída.", 'success', '✨'); }
-    } catch (e) { if (id === state.aiReqId) { state.lastAIError = String(e); state.aiState = 'error'; state.lastAIResult = t('aiErrorGeneric'); addSyncLog("Erro na análise IA.", 'error', '❌'); } } finally { if (id === state.aiReqId) { saveState(); renderAINotificationState(); } }
+        if (id === state.aiReqId) { state.lastAIResult = await res.text(); state.aiState = 'completed'; addSyncLog("Análise IA concluída.", 'success'); }
+    } catch (e) { if (id === state.aiReqId) { state.lastAIError = String(e); state.aiState = 'error'; state.lastAIResult = t('aiErrorGeneric'); addSyncLog("Erro na análise IA.", 'error'); } } finally { if (id === state.aiReqId) { saveState(); renderAINotificationState(); } }
 }
 
 export function importData() {

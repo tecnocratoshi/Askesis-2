@@ -77,3 +77,7 @@ export const DOM_SELECTORS = {
     DROP_ZONE: `.${CSS_CLASSES.DROP_ZONE}`,
     EMPTY_GROUP_PLACEHOLDER: `.${CSS_CLASSES.EMPTY_GROUP_PLACEHOLDER}`
 } as const;
+
+// UI constants (modals/explore)
+export const MODAL_COLORS = ['#e74c3c', '#f1c40f', '#3498db', '#2ecc71', '#9b59b6', '#1abc9c', '#34495e', '#e67e22', '#e84393', '#7f8c8d', '#26A69A', '#FFA726', '#5C6BC0', '#EC407A', '#9CCC65'] as const;
+export const EXPLORE_STAGGER_DELAY_MS = 50;

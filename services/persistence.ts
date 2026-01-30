@@ -245,7 +245,11 @@ export async function loadState(cloudState?: AppState): Promise<AppState | null>
         state.pending21DayHabitIds = [...(migrated.pending21DayHabitIds || [])];
         state.pendingConsolidationHabitIds = [...(migrated.pendingConsolidationHabitIds || [])];
         state.hasOnboarded = migrated.hasOnboarded ?? true;
-        state.syncLogs = migrated.syncLogs || [];
+        state.syncLogs = (migrated.syncLogs || []).map((log: any) => ({
+            time: log.time,
+            msg: log.msg,
+            type: log.type
+        }));
 
         if (state.syncLogs.length > 50) {
             state.syncLogs = state.syncLogs.slice(-50);

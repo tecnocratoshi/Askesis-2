@@ -22,7 +22,8 @@ import {
     LANGUAGES, 
     invalidateChartCache, 
     FREQUENCIES,
-    TimeOfDay
+    TimeOfDay,
+    MAX_HABIT_NAME_LENGTH
 } from '../state';
 import { PREDEFINED_HABITS } from '../data/predefinedHabits';
 import {
@@ -59,7 +60,6 @@ import { simpleMarkdownToHTML, pushToOneSignal, getContrastColor, addDays, parse
 import { setTextContent } from '../render/dom';
 
 // SECURITY: Limite rígido para inputs de texto para prevenir State Bloat e DoS.
-const MAX_HABIT_NAME_LENGTH = 50; 
 
 // --- STATIC HELPERS ---
 
@@ -135,7 +135,7 @@ function _validateAndFeedback(newName: string): boolean {
 // --- STATIC EVENT HANDLERS ---
 
 const _handleManageHabitsClick = () => {
-    // CHAOS FIX: Prevents modal stacking
+    // Guard: evita empilhamento de modais
     if (ui.manageModal.classList.contains('visible')) return;
     
     triggerHaptic('light');
@@ -145,7 +145,7 @@ const _handleManageHabitsClick = () => {
 };
 
 const _handleFabClick = () => {
-    // CHAOS FIX: Prevents modal stacking
+    // Guard: evita empilhamento de modais
     if (ui.exploreModal.classList.contains('visible')) return;
 
     triggerHaptic('light');
@@ -161,7 +161,7 @@ const _handleHabitListClick = (e: MouseEvent) => {
     const habitId = button.closest<HTMLLIElement>('li.habit-list-item')?.dataset.habitId;
     if (!habitId) return;
 
-    // CHAOS FIX: Prevent opening confirmation if already open
+    // Guard: evita abrir confirmação duplicada
     if (ui.confirmModal.classList.contains('visible')) return;
 
     triggerHaptic('light');
@@ -185,7 +185,7 @@ const _handleManageModalClick = (e: MouseEvent) => {
 };
 
 const _handleResetAppClick = () => {
-    // CHAOS FIX: Prevent stacking confirmation
+    // Guard: evita empilhamento de confirmação
     if (ui.confirmModal.classList.contains('visible')) return;
 
     triggerHaptic('light');

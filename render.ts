@@ -45,7 +45,7 @@ export function openSyncDebugModal() {
         const time = new Date(log.time).toLocaleTimeString();
         const color = log.type === 'error' ? '#ff6b6b' : (log.type === 'success' ? '#27ae60' : 'var(--text-secondary)');
         return `<div style="font-family:monospace; font-size:11px; padding:6px 0; border-bottom:1px solid var(--border-color); color:${color}">
-            <span style="opacity:0.5">[${time}]</span> ${log.icon || ''} ${log.msg}
+            <span style="opacity:0.5">[${time}]</span> ${log.msg}
         </div>`;
     }).join('');
 

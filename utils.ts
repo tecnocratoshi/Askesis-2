@@ -247,6 +247,7 @@ function formatInline(line: string): string { return escapeHTML(line).replace(MD
 const MD_H3_REGEX = /^### /;
 
 // --- Logger (Dev Only) ---
+// Política: usar `logger` em código de app; `console` fica restrito a testes/build.
 const SHOULD_LOG = typeof process !== 'undefined' && !!process.env && process.env.NODE_ENV !== 'production';
 export const logger = {
     info: (message: string, data?: unknown) => {

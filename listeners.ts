@@ -54,21 +54,29 @@ const _handleVisibilityChange = () => {
     if (isHandlingVisibility) return;
     isHandlingVisibility = true;
 
-    _handleNetworkChange();
-    const cachedToday = getTodayUTCIso();
-    resetTodayCache();
-    const realToday = getTodayUTCIso();
-    if (cachedToday !== realToday) {
-        if (state.selectedDate === cachedToday) state.selectedDate = realToday;
-        document.dispatchEvent(new CustomEvent('dayChanged'));
-        isHandlingVisibility = false;
-    } else {
-        if (visibilityRafId) cancelAnimationFrame(visibilityRafId);
-        visibilityRafId = requestAnimationFrame(() => {
-            renderApp();
-            visibilityRafId = null;
+    try {
+        _handleNetworkChange();
+        const cachedToday = getTodayUTCIso();
+        resetTodayCache();
+        const realToday = getTodayUTCIso();
+        if (cachedToday !== realToday) {
+            if (state.selectedDate === cachedToday) state.selectedDate = realToday;
+            document.dispatchEvent(new CustomEvent('dayChanged'));
             isHandlingVisibility = false;
-        });
+        } else {
+            if (visibilityRafId) cancelAnimationFrame(visibilityRafId);
+            visibilityRafId = requestAnimationFrame(() => {
+                try {
+                    renderApp();
+                } finally {
+                    visibilityRafId = null;
+                    isHandlingVisibility = false;
+                }
+            });
+        }
+    } catch (e) {
+        isHandlingVisibility = false;
+        throw e;
     }
 };
 

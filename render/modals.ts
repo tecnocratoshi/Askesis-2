@@ -8,22 +8,22 @@
  * @description Motor de Renderização de Modais e Diálogos (UI Overlay Layer).
  */
 
-import { state, Habit, HabitTemplate, Frequency, PredefinedHabit, TimeOfDay, STREAK_CONSOLIDATED, TIMES_OF_DAY, FREQUENCIES, LANGUAGES, getHabitDailyInfoForDate } from '../state';
+import { state, Habit, HabitTemplate, Frequency, PredefinedHabit, TimeOfDay, STREAK_CONSOLIDATED, TIMES_OF_DAY, FREQUENCIES, LANGUAGES, getHabitDailyInfoForDate, MAX_HABIT_NAME_LENGTH } from '../state';
 import { PREDEFINED_HABITS } from '../data/predefinedHabits';
 import { getScheduleForDate, calculateHabitStreak, getHabitDisplayInfo } from '../services/selectors';
 import { ui } from './ui';
 import { t, compareStrings, formatDate, formatInteger, getTimeOfDayName } from '../i18n';
 import { HABIT_ICONS, UI_ICONS, getTimeOfDayIcon } from './icons';
 import { setTextContent, updateReelRotaryARIA } from './dom';
+import { MODAL_COLORS, EXPLORE_STAGGER_DELAY_MS } from './constants';
 import { escapeHTML, getContrastColor, parseUTCIsoDate, getTodayUTCIso, getSafeDate, triggerHaptic } from '../utils';
 
 interface ModalContext { element: HTMLElement; previousFocus: HTMLElement | null; onClose?: () => void; firstFocusable?: HTMLElement; lastFocusable?: HTMLElement; }
 const modalStack: ModalContext[] = [];
 const OPTS_NOTES = { day: 'numeric', month: 'long', timeZone: 'UTC' } as const;
-const COLORS = ['#e74c3c', '#f1c40f', '#3498db', '#2ecc71', '#9b59b6', '#1abc9c', '#34495e', '#e67e22', '#e84393', '#7f8c8d', '#26A69A', '#FFA726', '#5C6BC0', '#EC407A', '#9CCC65'];
 
 function _getLeastUsedColor(): string {
-    const counts = new Map(COLORS.map(c => [c, 0]));
+    const counts = new Map(MODAL_COLORS.map(c => [c, 0]));
     state.habits.forEach(h => {
         const lastSchedule = h.scheduleHistory[h.scheduleHistory.length - 1];
         if (!h.graduatedOn && lastSchedule && counts.has(lastSchedule.color)) {
@@ -31,7 +31,7 @@ function _getLeastUsedColor(): string {
         }
     });
     let min = Math.min(...counts.values());
-    const candidates = COLORS.filter(c => counts.get(c) === min);
+    const candidates = MODAL_COLORS.filter(c => counts.get(c) === min);
     return candidates[state.habits.length % candidates.length];
 }
 
@@ -128,7 +128,12 @@ export function setupManageModal() {
     
     ui.habitList.innerHTML = items.map(({ h, st, name, subtitle }) => {
         const lastSchedule = h.scheduleHistory[h.scheduleHistory.length - 1];
-        return `<li class="habit-list-item ${st}" data-habit-id="${h.id}"><span class="habit-main-info"><span class="habit-icon-slot" style="color:${lastSchedule.color}">${lastSchedule.icon}</span><div style="display:flex;flex-direction:column;flex-grow:1;"><span class="habit-name">${name}</span>${subtitle ? `<span class="habit-subtitle" style="font-size:11px;color:var(--text-tertiary)">${subtitle}</span>` : ''}</div>${st !== 'active' ? `<span class="habit-name-status">${t(st === 'graduated' ? 'modalStatusGraduated' : 'modalStatusEnded')}</span>` : ''}</span><div class="habit-list-actions">${st === 'active' ? `${calculateHabitStreak(h, today) >= STREAK_CONSOLIDATED ? `<button class="graduate-habit-btn" aria-label="${t('aria_graduate', { name })}">${UI_ICONS.graduateAction}</button>` : `<button class="end-habit-btn" aria-label="${t('aria_end', { name })}">${UI_ICONS.endAction}</button>`}` : `<button class="permanent-delete-habit-btn" aria-label="${t('aria_delete_permanent', { name })}">${UI_ICONS.deletePermanentAction}</button>`}</div></li>`;
+        const safeName = escapeHTML(name);
+        const safeSubtitle = subtitle ? escapeHTML(subtitle) : '';
+        const ariaGraduate = escapeHTML(t('aria_graduate', { name }));
+        const ariaEnd = escapeHTML(t('aria_end', { name }));
+        const ariaDelete = escapeHTML(t('aria_delete_permanent', { name }));
+        return `<li class="habit-list-item ${st}" data-habit-id="${h.id}"><span class="habit-main-info"><span class="habit-icon-slot" style="color:${lastSchedule.color}">${lastSchedule.icon}</span><div style="display:flex;flex-direction:column;flex-grow:1;"><span class="habit-name">${safeName}</span>${subtitle ? `<span class="habit-subtitle" style="font-size:11px;color:var(--text-tertiary)">${safeSubtitle}</span>` : ''}</div>${st !== 'active' ? `<span class="habit-name-status">${t(st === 'graduated' ? 'modalStatusGraduated' : 'modalStatusEnded')}</span>` : ''}</span><div class="habit-list-actions">${st === 'active' ? `${calculateHabitStreak(h, today) >= STREAK_CONSOLIDATED ? `<button class="graduate-habit-btn" aria-label="${ariaGraduate}">${UI_ICONS.graduateAction}</button>` : `<button class="end-habit-btn" aria-label="${ariaEnd}">${UI_ICONS.endAction}</button>`}` : `<button class="permanent-delete-habit-btn" aria-label="${ariaDelete}">${UI_ICONS.deletePermanentAction}</button>`}</div></li>`;
     }).join('');
 }
 
@@ -171,7 +176,7 @@ export function renderIconPicker() {
 
 export function renderColorPicker() {
     const cur = state.editingHabit?.formData.color;
-    ui.colorPickerGrid.innerHTML = COLORS.map(c => `<button type="button" class="color-swatch ${cur === c ? 'selected' : ''}" style="background-color:${c}" data-color="${c}"></button>`).join('');
+    ui.colorPickerGrid.innerHTML = MODAL_COLORS.map(c => `<button type="button" class="color-swatch ${cur === c ? 'selected' : ''}" style="background-color:${c}" data-color="${c}"></button>`).join('');
 }
 
 export function renderFrequencyOptions() {
@@ -190,7 +195,11 @@ export function refreshEditModalUI() {
     const fd = state.editingHabit.formData;
     ui.habitTimeContainer.innerHTML = `<div class="segmented-control">${TIMES_OF_DAY.map(time => `<button type="button" class="segmented-control-option ${fd.times.includes(time) ? 'selected' : ''}" data-time="${time}">${getTimeOfDayIcon(time)}${getTimeOfDayName(time)}</button>`).join('')}</div>`;
     const nameIn = ui.editHabitForm.elements.namedItem('habit-name') as HTMLInputElement;
-    if (nameIn) { nameIn.placeholder = t('modalEditFormNameLabel'); if (fd.nameKey) nameIn.value = t(fd.nameKey); }
+    if (nameIn) { 
+        nameIn.placeholder = t('modalEditFormNameLabel');
+        nameIn.maxLength = MAX_HABIT_NAME_LENGTH;
+        if (fd.nameKey) nameIn.value = t(fd.nameKey); 
+    }
     
     let ce = ui.habitConscienceDisplay;
     if (!ce && ui.editHabitForm) { ce = document.createElement('div'); ce.id = 'habit-conscience-display'; ce.className = 'habit-conscience-text'; ui.editHabitForm.querySelector('.habit-identity-section')?.insertAdjacentElement('afterend', ce); }
@@ -224,7 +233,10 @@ export function openEditModal(habit: any, targetDateOverride?: string) {
 
     state.editingHabit = { isNew: isN, habitId: isN ? undefined : habit.id, originalData: isN ? undefined : habit, formData: fd, targetDate: safe };
     const ni = ui.editHabitForm.elements.namedItem('habit-name') as HTMLInputElement;
-    if (ni) ni.value = isN ? (fd.nameKey ? t(fd.nameKey) : '') : getHabitDisplayInfo(habit, safe).name;
+    if (ni) {
+        ni.maxLength = MAX_HABIT_NAME_LENGTH;
+        ni.value = isN ? (fd.nameKey ? t(fd.nameKey) : '') : getHabitDisplayInfo(habit, safe).name;
+    }
     const btn = ui.habitIconPickerBtn; btn.innerHTML = fd.icon; btn.style.backgroundColor = fd.color; btn.style.color = getContrastColor(fd.color);
     
     const subtitle = isN 
@@ -243,14 +255,13 @@ export function openEditModal(habit: any, targetDateOverride?: string) {
 }
 
 export function renderExploreHabits() {
-    const STAGGER_DELAY_MS = 50;
     ui.exploreHabitList.innerHTML = PREDEFINED_HABITS.map((h, i) => 
         `<div 
             class="explore-habit-item" 
             data-index="${i}" 
             role="button" 
             tabindex="0"
-            style="--delay: ${i * STAGGER_DELAY_MS}ms;"
+            style="--delay: ${i * EXPLORE_STAGGER_DELAY_MS}ms;"
         >
             <div class="explore-habit-icon" style="background-color:${h.color}30;color:${h.color}">${h.icon}</div>
             <div class="explore-habit-details">

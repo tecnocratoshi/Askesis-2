@@ -92,7 +92,6 @@ export interface SyncLog {
     time: number;
     msg: string;
     type: 'success' | 'error' | 'info';
-    icon?: string; 
 }
 
 export interface AppState {
@@ -133,6 +132,7 @@ export interface PredefinedHabit extends HabitTemplate {
 export const APP_VERSION = 9; 
 export const STREAK_SEMI_CONSOLIDATED = 21;
 export const STREAK_CONSOLIDATED = 66;
+export const MAX_HABIT_NAME_LENGTH = 50;
 
 export const HABIT_STATE = {
     NULL: 0,

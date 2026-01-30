@@ -3,6 +3,12 @@
 **Data:** 30 de Janeiro de 2026  
 **Escopo:** Análise completa de `services/*.ts`, `listeners.ts`, `render/*.ts`, `state.ts`, `utils.ts`
 
+## ✅ Atualizações Implementadas (30/01/2026)
+
+- Robustez de sync/IA (timeouts, validação de respostas, recuperação de estado).
+- Consistência de limites e sanitização em UI e camada de negócio.
+- Redução de redundâncias (icons, dataMerge, helpers) e cleanup de tipos globais.
+
 ---
 
 ## 📊 Resumo Executivo

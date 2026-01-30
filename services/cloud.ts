@@ -71,7 +71,13 @@ export function runWorkerTask<T>(type: 'encrypt' | 'decrypt' | 'build-ai-prompt'
             resolve: (val) => { clearTimeout(timeoutId); resolve(val); }, 
             reject: (err) => { clearTimeout(timeoutId); reject(err); } 
         });
-        getWorker().postMessage({ id, type, payload, key });
+        try {
+            getWorker().postMessage({ id, type, payload, key });
+        } catch (err) {
+            clearTimeout(timeoutId);
+            workerCallbacks.delete(id);
+            reject(err);
+        }
     });
 }
 
@@ -171,9 +177,9 @@ function murmurHash3(key: string, seed: number = 0): string {
     return (h1 >>> 0).toString(16);
 }
 
-export function addSyncLog(msg: string, type: 'success' | 'error' | 'info' = 'info', icon?: string) {
+export function addSyncLog(msg: string, type: 'success' | 'error' | 'info' = 'info') {
     if (!state.syncLogs) state.syncLogs = [];
-    state.syncLogs.push({ time: Date.now(), msg, type, icon });
+    state.syncLogs.push({ time: Date.now(), msg, type });
     pruneSyncLogs();
     logger.info(`[Sync Log] ${msg}`);
 }
@@ -206,7 +212,7 @@ async function resolveConflictWithServerState(serverShards: Record<string, strin
     if (!syncKey) return setSyncStatus('syncError');
     
     try {
-        addSyncLog("Conflito detectado. Mesclando dados...", "info", "🔄");
+        addSyncLog("Conflito detectado. Mesclando dados...", "info");
         const remoteShards: Record<string, any> = {};
         for (const key in serverShards) {
             if (key === 'lastModified') continue;
@@ -252,11 +258,11 @@ async function resolveConflictWithServerState(serverShards: Record<string, strin
         renderApp();
         
         setSyncStatus('syncSynced'); 
-        addSyncLog("Mesclagem concluída.", "success", "✨");
+        addSyncLog("Mesclagem concluída.", "success");
         clearSyncHashCache(); 
         syncStateWithCloud(mergedState, true);
     } catch (error: any) {
-        addSyncLog(`Erro na resolução: ${error.message}`, "error", "❌");
+        addSyncLog(`Erro na resolução: ${error.message}`, "error");
         setSyncStatus('syncError');
     }
 }
@@ -294,7 +300,7 @@ async function performSync() {
             return;
         }
 
-        addSyncLog(`Sincronizando ${changeCount} pacotes...`, "info", "📤");
+        addSyncLog(`Sincronizando ${changeCount} pacotes...`, "info");
         const safeTs = appState.lastModified || Date.now();
         
         const payload = { lastModified: safeTs, shards: encryptedShards };
@@ -307,7 +313,7 @@ async function performSync() {
             clearSyncHashCache();
             await resolveConflictWithServerState(await response.json());
         } else if (response.ok) {
-            addSyncLog("Nuvem atualizada.", "success", "✅");
+            addSyncLog("Nuvem atualizada.", "success");
             setSyncStatus('syncSynced');
             pendingHashUpdates.forEach((hash, shard) => lastSyncedHashes.set(shard, hash));
             persistHashCache();
@@ -317,7 +323,7 @@ async function performSync() {
             throw new Error(errorData.error || `Erro ${response.status}`);
         }
     } catch (error: any) {
-        addSyncLog(`Falha no envio: ${error.message}`, "error", "⚠️");
+        addSyncLog(`Falha no envio: ${error.message}`, "error");
         setSyncStatus('syncError');
     } finally {
         isSyncInProgress = false;
@@ -387,13 +393,13 @@ async function reconstructStateFromShards(shards: Record<string, string>): Promi
 }
 
 export async function downloadRemoteState(): Promise<AppState | undefined> {
-    addSyncLog("Baixando dados remotos...", "info", "🔍");
+    addSyncLog("Baixando dados remotos...", "info");
     const response = await apiFetch('/api/sync', {}, true);
-    if (response.status === 304) { addSyncLog("Sem novidades na nuvem.", "info", "💤"); return undefined; }
+    if (response.status === 304) { addSyncLog("Sem novidades na nuvem.", "info"); return undefined; }
     if (!response.ok) throw new Error("Falha na conexão com a nuvem");
     const shards = await response.json();
-    if (!shards || Object.keys(shards).length === 0) { addSyncLog("Cofre vazio na nuvem.", "info", "🌫️"); return undefined; }
-    addSyncLog("Dados baixados com sucesso.", "success", "📥");
+    if (!shards || Object.keys(shards).length === 0) { addSyncLog("Cofre vazio na nuvem.", "info"); return undefined; }
+    addSyncLog("Dados baixados com sucesso.", "success");
     return await reconstructStateFromShards(shards);
 }
 
@@ -425,13 +431,13 @@ export async function fetchStateFromCloud(): Promise<AppState | undefined> {
         const remoteModified = remoteState.lastModified || 0, localModified = localState.lastModified || 0;
         
         if (remoteModified > localModified) {
-            addSyncLog("Atualização remota detectada.", "info", "☁️");
+            addSyncLog("Atualização remota detectada.", "info");
             const mergedState = await mergeStates(localState, remoteState);
             await persistStateLocally(mergedState);
             await loadState(mergedState);
             renderApp();
         } else if (localModified > remoteModified) {
-            addSyncLog("Sincronizando mudanças locais...", "info", "🚀");
+            addSyncLog("Sincronizando mudanças locais...", "info");
             syncStateWithCloud(localState, true);
         } else {
             setSyncStatus('syncSynced');
