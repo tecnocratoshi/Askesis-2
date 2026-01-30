@@ -199,7 +199,6 @@ export const state: {
     uiDirtyState: { calendarVisuals: boolean; habitListStructure: boolean; chartData: boolean; };
     monthlyLogs: Map<string, bigint>;
     editingHabit?: { isNew: boolean; habitId?: string; originalData?: any; formData: HabitTemplate; targetDate: string };
-    pendingHabitTime: TimeOfDay | null;
     confirmAction: (() => void) | null;
     confirmEditAction: (() => void) | null;
     editingNoteFor: { habitId: string; date: string; time: TimeOfDay } | null;
@@ -235,7 +234,6 @@ export const state: {
     monthlyLogs: new Map(),
     confirmAction: null,
     confirmEditAction: null,
-    pendingHabitTime: null,
     editingNoteFor: null,
     calendarDates: []
 };
