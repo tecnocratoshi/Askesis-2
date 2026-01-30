@@ -98,12 +98,17 @@ const _updateVisuals = () => {
     if (SwipeState.wasOpenLeft) tx += SwipeState.actionWidth;
     if (SwipeState.wasOpenRight) tx -= SwipeState.actionWidth;
 
+    const deadzone = INTENT_THRESHOLD;
+    const absPre = tx < 0 ? -tx : tx;
+    if (absPre < deadzone) tx = 0;
+    else tx = (tx < 0 ? tx + deadzone : tx - deadzone) | 0;
+
     // Resistência após ultrapassar a largura do swipe
     const absTx = tx < 0 ? -tx : tx;
     const maxReveal = SwipeState.actionWidth;
     if (absTx > maxReveal) {
         const over = absTx - maxReveal;
-        const resisted = maxReveal + over * 0.08;
+        const resisted = maxReveal + (over * 0.08) / (1 + (over / (maxReveal * 1.2)));
         tx = (tx < 0 ? -resisted : resisted) | 0;
 
         const stepSize = SwipeState.actionWidth * 0.08;
@@ -168,8 +173,6 @@ const _handlePointerMove = (e: PointerEvent) => {
             if (dx > dy) {
                 // Horizontal swipe confirmed
                 SwipeState.direction = DIR_HORIZ;
-                const sign = SwipeState.currentX >= SwipeState.startX ? 1 : -1;
-                SwipeState.startX = (SwipeState.startX + (INTENT_THRESHOLD * sign)) | 0;
                 SwipeState.isActive = 1;
                 document.body.classList.add('is-interaction-active');
                 SwipeState.card.classList.add(CSS_CLASSES.IS_SWIPING);
@@ -190,6 +193,10 @@ const _handlePointerMove = (e: PointerEvent) => {
         let dx = (SwipeState.currentX - SwipeState.startX) | 0;
         if (SwipeState.wasOpenLeft) dx += SwipeState.actionWidth;
         if (SwipeState.wasOpenRight) dx -= SwipeState.actionWidth;
+        const dz = INTENT_THRESHOLD;
+        const absPre = dx < 0 ? -dx : dx;
+        if (absPre < dz) dx = 0;
+        else dx = (dx < 0 ? dx + dz : dx - dz) | 0;
         const absX = dx < 0 ? -dx : dx;
         if (!SwipeState.hasHaptics && absX > HAPTIC_THRESHOLD) {
             triggerHaptic('selection'); SwipeState.hasHaptics = 1;
