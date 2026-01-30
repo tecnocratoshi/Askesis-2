@@ -35,7 +35,13 @@ import {
     CHART_MAX_DAILY_CHANGE_RATE,
     CHART_PLUS_BONUS_MULTIPLIER,
     CHART_SVG_HEIGHT,
-    CHART_PADDING as CHART_PADDING_CONST
+    CHART_PADDING as CHART_PADDING_CONST,
+    CHART_MIN_VISUAL_AMPLITUDE,
+    CHART_SAFETY_PADDING_RATIO,
+    CHART_FALLBACK_WIDTH,
+    CHART_CONTAINER_PADDING_PX,
+    CHART_INTERSECTION_THRESHOLD,
+    CHART_CURVE_TENSION
 } from '../constants';
 
 const CHART_DAYS = CHART_DAYS_CONST;
@@ -165,7 +171,7 @@ function _generateChartPaths(chartData: ChartDataPoint[], chartWidthPx: number):
         if (val > dataMax) dataMax = val;
     }
 
-    const MIN_VISUAL_AMPLITUDE = 2.0; 
+    const MIN_VISUAL_AMPLITUDE = CHART_MIN_VISUAL_AMPLITUDE;
     let spread = dataMax - dataMin;
 
     if (spread < MIN_VISUAL_AMPLITUDE) {
@@ -175,7 +181,7 @@ function _generateChartPaths(chartData: ChartDataPoint[], chartWidthPx: number):
         spread = MIN_VISUAL_AMPLITUDE;
     }
 
-    const safetyPadding = spread * 0.25;
+    const safetyPadding = spread * CHART_SAFETY_PADDING_RATIO;
     const minVal = dataMin - safetyPadding;
     const maxVal = dataMax + safetyPadding;
     const valueRange = maxVal - minVal;
@@ -197,7 +203,7 @@ function _generateChartPaths(chartData: ChartDataPoint[], chartWidthPx: number):
     const firstX = paddingLeft;
     const firstY = yBase - ((firstVal - minVal) * yFactor);
     let linePathData = 'M ' + firstX + ' ' + firstY;
-    const k = 0.25; 
+    const k = CHART_CURVE_TENSION; 
 
     for (let i = 0; i < len - 1; i = (i + 1) | 0) {
         const p0Val = chartData[i > 0 ? i - 1 : i].value;
@@ -267,8 +273,8 @@ function _updateChartDOM(chartData: ChartDataPoint[]) {
     if (!areaPath || !linePath || !chartData || chartData.length === 0) return;
 
     let svgWidth = ui.chart.wrapper.getBoundingClientRect().width;
-    if (!svgWidth && ui.chartContainer.clientWidth > 0) svgWidth = ui.chartContainer.clientWidth - 32;
-    if (!svgWidth) svgWidth = 300;
+    if (!svgWidth && ui.chartContainer.clientWidth > 0) svgWidth = ui.chartContainer.clientWidth - CHART_CONTAINER_PADDING_PX;
+    if (!svgWidth) svgWidth = CHART_FALLBACK_WIDTH;
 
     if (chartData === renderedDataRef && svgWidth === renderedWidth) return;
 
@@ -295,7 +301,7 @@ function initChartObservers() {
             isChartDirty = false;
             _updateChartDOM(chartInteractionState.lastChartData);
         }
-    }, { threshold: 0.1 });
+    }, { threshold: CHART_INTERSECTION_THRESHOLD });
     chartObserver.observe(ui.chartContainer);
 
     resizeObserver = new ResizeObserver(() => {

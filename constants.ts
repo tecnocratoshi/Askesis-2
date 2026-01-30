@@ -37,6 +37,12 @@ export const CHART_MAX_DAILY_CHANGE_RATE = 0.025;
 export const CHART_PLUS_BONUS_MULTIPLIER = 1.5;
 export const CHART_SVG_HEIGHT = 75;
 export const CHART_PADDING = { top: 5, right: 0, bottom: 5, left: 3 } as const;
+export const CHART_MIN_VISUAL_AMPLITUDE = 2.0;
+export const CHART_SAFETY_PADDING_RATIO = 0.25;
+export const CHART_FALLBACK_WIDTH = 300;
+export const CHART_CONTAINER_PADDING_PX = 32;
+export const CHART_INTERSECTION_THRESHOLD = 0.1;
+export const CHART_CURVE_TENSION = 0.25;
 
 export const HAPTIC_PATTERNS = {
 	selection: 8,
@@ -61,6 +67,11 @@ export const CLOUD_SYNC_LOG_MAX_ENTRIES = 50;
 export const CLOUD_SYNC_LOG_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 export const CLOUD_HASH_CACHE_MAX_ENTRIES = 2000;
 export const CLOUD_WORKER_TIMEOUT_MS = 15000;
+
+export const CACHE_HABIT_APPEARANCE_DAYS = 90;
+export const CACHE_STREAKS_YEARS = 1;
+
+export const ARCHIVE_DAYS_THRESHOLD = 90;
 
 export const ARCHIVE_IDLE_FALLBACK_MS = 5000;
 

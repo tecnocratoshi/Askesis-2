@@ -78,7 +78,19 @@ class PerformanceMonitor {
   }
 }
 
+const PERF_BUDGETS = {
+  create100HabitsMs: 100,
+  populate3YearsMs: 500,
+  read10kMs: 50,
+  render100CardsMs: 200,
+  toggle1000Ms: 100,
+  memoryGrowthMb: 10,
+  batch1000Ms: 150,
+  serialize10YearsMs: 1000
+} as const;
+
 describe('⚡ SUPER-TESTE 3: Estresse e Performance', () => {
+  const TEST_DATE = '2024-01-15';
   let monitor: PerformanceMonitor;
 
   beforeEach(() => {
@@ -101,7 +113,7 @@ describe('⚡ SUPER-TESTE 3: Estresse e Performance', () => {
     });
 
     expect(state.habits).toHaveLength(100);
-    expect(duration).toBeLessThan(100); // Budget: 100ms
+    expect(duration).toBeLessThan(PERF_BUDGETS.create100HabitsMs); // Budget: 100ms
 
     logger.info(`✅ Criou 100 hábitos em ${duration.toFixed(2)}ms`);
   });
@@ -131,7 +143,7 @@ describe('⚡ SUPER-TESTE 3: Estresse e Performance', () => {
       }
     });
 
-    expect(duration).toBeLessThan(500); // Budget: 500ms
+    expect(duration).toBeLessThan(PERF_BUDGETS.populate3YearsMs); // Budget: 500ms
 
     // Verificar integridade dos dados
     const firstDay = HabitService.getStatus(habitIds[0], '2022-01-01', 'Morning');
@@ -170,7 +182,7 @@ describe('⚡ SUPER-TESTE 3: Estresse e Performance', () => {
       }
     });
 
-    expect(duration).toBeLessThan(50); // Budget: 50ms para 10k leituras
+    expect(duration).toBeLessThan(PERF_BUDGETS.read10kMs); // Budget: 50ms para 10k leituras
 
     logger.info(`✅ Leu 10,000 status em ${duration.toFixed(2)}ms (${(duration / 10000).toFixed(4)}ms cada)`);
   });
@@ -186,7 +198,7 @@ describe('⚡ SUPER-TESTE 3: Estresse e Performance', () => {
     }
 
     const habitList = document.getElementById('habit-list')!;
-    const today = '2024-01-15';
+    const today = TEST_DATE;
 
     const duration = monitor.measure('render-100-cards', () => {
       state.habits.forEach(habit => {
@@ -196,7 +208,7 @@ describe('⚡ SUPER-TESTE 3: Estresse e Performance', () => {
     });
 
     expect(habitList.children.length).toBe(100);
-    expect(duration).toBeLessThan(200); // Budget: 200ms
+    expect(duration).toBeLessThan(PERF_BUDGETS.render100CardsMs); // Budget: 200ms
 
     logger.info(`✅ Renderizou 100 cartões em ${duration.toFixed(2)}ms`);
   });
@@ -208,13 +220,13 @@ describe('⚡ SUPER-TESTE 3: Estresse e Performance', () => {
       goalType: 'check',
     });
 
-    const date = '2024-01-15';
+    const date = TEST_DATE;
 
     const duration = monitor.measure('1000-toggles', () => {
       clickTestHabit(habitId, date, 'Morning', 1000);
     });
 
-    expect(duration).toBeLessThan(100); // Budget: 100ms
+    expect(duration).toBeLessThan(PERF_BUDGETS.toggle1000Ms); // Budget: 100ms
 
     // Verificar estado final (1000 toggles = PENDING)
     const finalStatus = HabitService.getStatus(habitId, date, 'Morning');
@@ -290,7 +302,7 @@ describe('⚡ SUPER-TESTE 3: Estresse e Performance', () => {
       const growthMB = growth / (1024 * 1024);
 
       // Crescimento deve ser razoável (< 10MB para 10k ops)
-      expect(growthMB).toBeLessThan(10);
+      expect(growthMB).toBeLessThan(PERF_BUDGETS.memoryGrowthMb);
 
       logger.info(`✅ Crescimento de memória: ${growthMB.toFixed(2)}MB`);
     } else {
@@ -307,7 +319,7 @@ describe('⚡ SUPER-TESTE 3: Estresse e Performance', () => {
       })
     );
 
-    const date = '2024-01-15';
+    const date = TEST_DATE;
 
     const duration = monitor.measure('batch-1000-ops', () => {
       habitIds.forEach(id => {
@@ -315,7 +327,7 @@ describe('⚡ SUPER-TESTE 3: Estresse e Performance', () => {
       });
     });
 
-    expect(duration).toBeLessThan(150); // Budget: 150ms
+    expect(duration).toBeLessThan(PERF_BUDGETS.batch1000Ms); // Budget: 150ms
 
     // Verificar todos foram processados
     habitIds.forEach(id => {
@@ -353,7 +365,7 @@ describe('⚡ SUPER-TESTE 3: Estresse e Performance', () => {
       HabitService.serializeLogsForCloud();
     });
 
-    expect(duration).toBeLessThan(1000); // Budget: 1s
+    expect(duration).toBeLessThan(PERF_BUDGETS.serialize10YearsMs); // Budget: 1s
 
     logger.info(`✅ Serializou 10 anos de dados em ${duration.toFixed(2)}ms`);
   });

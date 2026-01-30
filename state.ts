@@ -9,6 +9,7 @@
  */
 
 import { getTodayUTCIso, parseUTCIsoDate, toUTCIsoDateString, logger } from './utils';
+import { CACHE_HABIT_APPEARANCE_DAYS, CACHE_STREAKS_YEARS } from './constants';
 
 // --- TYPES & INTERFACES ---
 
@@ -346,7 +347,7 @@ export function pruneHabitAppearanceCache(): void {
     try {
         const today = parseUTCIsoDate(getTodayUTCIso());
         const ninetyDaysAgo = new Date(today);
-        ninetyDaysAgo.setUTCDate(ninetyDaysAgo.getUTCDate() - 90);
+        ninetyDaysAgo.setUTCDate(ninetyDaysAgo.getUTCDate() - CACHE_HABIT_APPEARANCE_DAYS);
         const cutoffDate = toUTCIsoDateString(ninetyDaysAgo);
         
         state.habitAppearanceCache.forEach((dateMap, habitId) => {
@@ -371,7 +372,7 @@ export function pruneStreaksCache(): void {
     try {
         const today = new Date(parseUTCIsoDate(getTodayUTCIso()));
         const oneYearAgo = new Date(today);
-        oneYearAgo.setUTCFullYear(oneYearAgo.getUTCFullYear() - 1);
+        oneYearAgo.setUTCFullYear(oneYearAgo.getUTCFullYear() - CACHE_STREAKS_YEARS);
         const cutoffDate = toUTCIsoDateString(oneYearAgo);
         
         state.streaksCache.forEach((dateMap, habitId) => {

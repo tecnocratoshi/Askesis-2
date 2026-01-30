@@ -22,6 +22,7 @@ import {
 } from './test-utils';
 
 describe('🚀 SUPER-TESTE 1: Jornada do Novo Usuário', () => {
+  const TEST_DATE = '2024-01-15';
   
   beforeEach(() => {
     // Limpa estado global
@@ -70,7 +71,7 @@ describe('🚀 SUPER-TESTE 1: Jornada do Novo Usuário', () => {
     // ========================================
     // PASSO 2: Marcar hábitos com diferentes status
     // ========================================
-    const today = '2024-01-15';
+    const today = TEST_DATE;
 
     // Meditação: Feito (1 clique)
     clickTestHabit(habit1Id, today, 'Morning', 1);
@@ -184,7 +185,7 @@ describe('🚀 SUPER-TESTE 1: Jornada do Novo Usuário', () => {
     expect(state.habits).toHaveLength(10);
 
     // Marcar todos como feito
-    const today = '2024-01-15';
+    const today = TEST_DATE;
     habitIds.forEach(id => {
       clickTestHabit(id, today, 'Morning', 1);
     });
@@ -225,7 +226,7 @@ describe('🚀 SUPER-TESTE 1: Jornada do Novo Usuário', () => {
       '2024-01-10',
       '2024-01-11',
       '2024-01-12',
-      '2024-01-15',
+      TEST_DATE,
       '2024-01-20',
     ];
 

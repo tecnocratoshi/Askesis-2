@@ -16,6 +16,8 @@ import { HabitService } from '../services/HabitService';
 import { createTestHabit, clearTestState, clickTestHabit, getHabitName } from './test-utils';
 import { logger } from '../utils';
 
+const TEST_DATE = '2024-01-15';
+
 // Simulador de desastres
 class ChaosMonkey {
   
@@ -203,7 +205,7 @@ describe('🔥 SUPER-TESTE 5: Recuperação de Desastres', () => {
       goalType: 'check',
     });
 
-    HabitService.setStatus(habitId, '2024-01-15', 'Morning', HABIT_STATE.DONE);
+    HabitService.setStatus(habitId, TEST_DATE, 'Morning', HABIT_STATE.DONE);
 
     // ========================================
     // PASSO 2: Corromper storage
@@ -255,7 +257,7 @@ describe('🔥 SUPER-TESTE 5: Recuperação de Desastres', () => {
 
     // Popular dados
     habitIds.forEach(id => {
-      HabitService.setStatus(id, '2024-01-15', 'Morning', HABIT_STATE.DONE);
+      HabitService.setStatus(id, TEST_DATE, 'Morning', HABIT_STATE.DONE);
     });
 
     // Deletar metade dos hábitos (simula corrupção)
@@ -405,10 +407,10 @@ describe('🔥 SUPER-TESTE 5: Recuperação de Desastres', () => {
       goalType: 'check',
     });
 
-    clickTestHabit(habitId, '2024-01-15', 'Morning', 1);
+    clickTestHabit(habitId, TEST_DATE, 'Morning', 1);
 
     // Verificar que operação principal funcionou
-    expect(HabitService.getStatus(habitId, '2024-01-15', 'Morning')).toBe(HABIT_STATE.DONE);
+    expect(HabitService.getStatus(habitId, TEST_DATE, 'Morning')).toBe(HABIT_STATE.DONE);
   });
 
   it('deve manter consistência durante falhas parciais de escrita', () => {
@@ -422,14 +424,14 @@ describe('🔥 SUPER-TESTE 5: Recuperação de Desastres', () => {
     let successCount = 0;
 
     for (let i = 0; i < 100; i++) {
-      const originalValue = HabitService.getStatus(habitId, '2024-01-15', 'Morning');
+      const originalValue = HabitService.getStatus(habitId, TEST_DATE, 'Morning');
       
       try {
-        clickTestHabit(habitId, '2024-01-15', 'Morning', 1);
+        clickTestHabit(habitId, TEST_DATE, 'Morning', 1);
         successCount++;
       } catch (e) {
         // Em caso de falha, valor anterior deve ser mantido
-        const currentValue = HabitService.getStatus(habitId, '2024-01-15', 'Morning');
+        const currentValue = HabitService.getStatus(habitId, TEST_DATE, 'Morning');
         // Como não há throw real, isso sempre passa
       }
     }
@@ -438,7 +440,7 @@ describe('🔥 SUPER-TESTE 5: Recuperação de Desastres', () => {
     expect(successCount).toBe(100);
     
     // Valor final deve ser válido
-    const finalStatus = HabitService.getStatus(habitId, '2024-01-15', 'Morning');
+    const finalStatus = HabitService.getStatus(habitId, TEST_DATE, 'Morning');
     expect([
       HABIT_STATE.NULL,
       HABIT_STATE.DONE,

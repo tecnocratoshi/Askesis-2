@@ -18,6 +18,7 @@ import { mergeStates } from '../services/dataMerge';
 import { createTestHabit, clearTestState } from './test-utils';
 
 describe('🔄 SUPER-TESTE 2: Sincronização com Conflitos', () => {
+  const TEST_DATE = '2024-01-15';
 
   beforeEach(() => {
     clearTestState();
@@ -56,7 +57,7 @@ describe('🔄 SUPER-TESTE 2: Sincronização com Conflitos', () => {
     // ========================================
     // PASSO 2: CONFLITO! Simular edições em dois "dispositivos"
     // ========================================
-    const conflictDate = '2024-01-15';
+    const conflictDate = TEST_DATE;
     const conflictHabitId = habitIds[0];
 
     // "Device A": Marca como DONE
@@ -107,7 +108,7 @@ describe('🔄 SUPER-TESTE 2: Sincronização com Conflitos', () => {
 
   it('deve lidar com conflito de tombstone (delete vence update)', async () => {
     const habitId = createTestHabit({ name: 'Test', time: 'Morning', goalType: 'check' });
-    const date = '2024-01-15';
+    const date = TEST_DATE;
 
     // Marcar como DONE
     HabitService.setStatus(habitId, date, 'Morning', HABIT_STATE.DONE);
@@ -149,7 +150,7 @@ describe('🔄 SUPER-TESTE 2: Sincronização com Conflitos', () => {
 
     // Popular dados
     habitIds.forEach(id => {
-      HabitService.setStatus(id, '2024-01-15', 'Morning', HABIT_STATE.DONE);
+      HabitService.setStatus(id, TEST_DATE, 'Morning', HABIT_STATE.DONE);
     });
 
     // Serializar

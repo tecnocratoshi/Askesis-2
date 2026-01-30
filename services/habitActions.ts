@@ -28,7 +28,7 @@ import {
     generateUUID, getTodayUTCIso, parseUTCIsoDate, triggerHaptic,
     getSafeDate, addDays, toUTCIsoDateString, logger, sanitizeText
 } from '../utils';
-import { ARCHIVE_IDLE_FALLBACK_MS } from '../constants';
+import { ARCHIVE_IDLE_FALLBACK_MS, ARCHIVE_DAYS_THRESHOLD } from '../constants';
 import { 
     closeModal, showConfirmationModal, renderAINotificationState,
     clearHabitDomCache, updateDayVisuals
@@ -39,7 +39,6 @@ import { runWorkerTask, addSyncLog } from './cloud';
 import { apiFetch, clearKey } from './api';
 import { HabitService } from './HabitService';
 
-const ARCHIVE_DAYS_THRESHOLD = 90;
 const BATCH_IDS_POOL: string[] = [];
 const BATCH_HABITS_POOL: Habit[] = [];
 
