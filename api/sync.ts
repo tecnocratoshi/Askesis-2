@@ -59,6 +59,26 @@ async function sha256(message: string) {
     return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
 }
 
+function sleep(ms: number) {
+    return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+async function applyShardsNonLua(kv: ReturnType<typeof createClient>, dataKey: string, lastModified: number, shards: Record<string, string>) {
+    const currentTsRaw = await kv.hget(dataKey, 'lastModified');
+    const currentTs = Number(currentTsRaw || 0);
+    if (lastModified < currentTs) {
+        const all = await kv.hgetall(dataKey);
+        return { type: 'conflict', data: all } as const;
+    }
+
+    const entries = Object.entries(shards);
+    for (const [shardName, shardData] of entries) {
+        await kv.hset(dataKey, { [shardName]: shardData });
+    }
+    await kv.hset(dataKey, { lastModified: String(lastModified) });
+    return { type: 'ok' } as const;
+}
+
 export default async function handler(req: Request) {
     if (req.method === 'OPTIONS') return new Response(null, { status: 204, headers: HEADERS_BASE });
 
@@ -115,10 +135,24 @@ export default async function handler(req: Request) {
                 }
             }
 
-            const result = await kv.eval(LUA_SHARDED_UPDATE, [dataKey], [String(lastModifiedNum), JSON.stringify(shards)]) as any;
+            let result: any = null;
+            for (let attempt = 0; attempt < 2; attempt++) {
+                result = await kv.eval(LUA_SHARDED_UPDATE, [dataKey], [String(lastModifiedNum), JSON.stringify(shards)]) as any;
+                if (Array.isArray(result)) break;
+                await sleep(50);
+            }
 
             if (!Array.isArray(result)) {
-                return new Response(JSON.stringify({ error: 'Lua Execution Error', code: 'LUA_NON_ARRAY', detail: String(result), raw: result }), { status: 400, headers: HEADERS_BASE });
+                const fallback = await applyShardsNonLua(kv, dataKey, lastModifiedNum, shards);
+                if (fallback.type === 'ok') {
+                    return new Response('{"success":true,"fallback":true}', { status: 200, headers: HEADERS_BASE });
+                }
+                const rawList = fallback.data as string[];
+                const conflictShards: Record<string, string> = {};
+                for (let i = 0; i < rawList.length; i += 2) {
+                    conflictShards[rawList[i]] = rawList[i+1];
+                }
+                return new Response(JSON.stringify(conflictShards), { status: 409, headers: HEADERS_BASE });
             }
             
             if (result[0] === 'OK') return new Response('{"success":true}', { status: 200, headers: HEADERS_BASE });
