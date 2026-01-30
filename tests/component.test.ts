@@ -1,2 +1,4 @@
-// Este arquivo foi substituído por level-h-component.test.tsx
-// Use a versão .tsx que está em /workspaces/Askesis-2/tests/level-h-component.test.tsx
+
+// Arquivo desativado: todos os testes de componentes estão em component.test.tsx
+// Este arquivo existe apenas para compatibilidade e não executa nenhum teste.
+export {};
