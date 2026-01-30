@@ -8,7 +8,7 @@
  * @description Definição do Estado Global e Estruturas de Dados (Single Source of Truth).
  */
 
-import { getTodayUTCIso } from './utils';
+import { getTodayUTCIso, parseUTCIsoDate, toUTCIsoDateString } from './utils';
 
 // --- TYPES & INTERFACES ---
 
@@ -296,6 +296,14 @@ export function invalidateCachesForDateChange(dateISO: string, habitIds: string[
     state.scheduleCache.forEach((cache) => cache.delete(dateISO));
 }
 
+export function isChartDataDirty(): boolean {
+    return state.uiDirtyState.chartData;
+}
+
+export function invalidateChartCache() {
+    state.uiDirtyState.chartData = true;
+}
+
 /**
  * Limpa entradas antigas do habitAppearanceCache (mais de 90 dias).
  * Implementa rolling window cache para evitar memory leak.
@@ -345,12 +353,4 @@ export function pruneStreaksCache(): void {
     } catch (error) {
         console.warn('[Cache] Error pruning streaksCache:', error);
     }
-}
-
-export function isChartDataDirty(): boolean {
-    return state.uiDirtyState.chartData;
-}
-
-export function invalidateChartCache() {
-    state.uiDirtyState.chartData = true;
 }

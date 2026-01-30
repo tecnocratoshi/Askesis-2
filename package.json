@@ -4,9 +4,8 @@
   "version": "1.0.0",
   "description": "A dynamic habit tracker with data visualization and personalized AI-powered feedback.",
   "scripts": {
-    "dev": "vite",
-    "build": "vite build",
-    "preview": "vite preview",
+    "dev": "node build.js",
+    "build": "NODE_ENV=production node build.js",
     "test": "vitest run",
     "test:ui": "vitest --ui",
     "test:watch": "vitest"
@@ -22,16 +21,14 @@
   "license": "ISC",
   "dependencies": {
     "@google/genai": "^1.33.0",
-    "@playwright/test": "^1.58.0",
-    "@vercel/analytics": "^1.5.0",
     "@vercel/kv": "^3.0.0",
-    "fast-check": "^4.5.3"
+    "@vercel/analytics": "^1.5.0"
   },
   "devDependencies": {
     "@types/node": "^20.14.8",
-    "@vitest/ui": "^4.0.18",
-    "esbuild": "^0.27.2",
-    "happy-dom": "^20.4.0",
-    "vitest": "^4.0.18"
+    "@vitest/ui": "^1.6.0",
+    "esbuild": "^0.21.4",
+    "vitest": "^1.6.0",
+    "happy-dom": "^14.12.0"
   }
 }

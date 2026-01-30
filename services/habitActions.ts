@@ -87,6 +87,8 @@ function _notifyPartialUIRefresh(date: string, habitIds: string[]) {
     // Isso evita o reflow global da fita do calendário.
     invalidateCachesForDateChange(date, habitIds);
     
+    // state.uiDirtyState.calendarVisuals = true; // REMOVED: Managed surgically now
+    
     if (!state.initialSyncDone) {
         state.lastModified = state.lastModified + 1;
     } else {
@@ -188,16 +190,6 @@ const _applyHabitDeletion = async () => {
     // garantindo que ele não apareça em nenhum filtro de data (shouldHabitAppearOnDate).
     habit.deletedOn = habit.createdOn;
     
-    // ✅ Limpar streaksCache para este hábito deletado
-    if (state.streaksCache.has(habit.id)) {
-        state.streaksCache.delete(habit.id);
-    }
-    
-    // ✅ Limpar habitAppearanceCache para este hábito deletado
-    if (state.habitAppearanceCache.has(habit.id)) {
-        state.habitAppearanceCache.delete(habit.id);
-    }
-    
     // 2. Limpeza Profunda de Logs (Bitmasks)
     HabitService.pruneLogsForHabit(habit.id);
 
@@ -210,6 +202,14 @@ const _applyHabitDeletion = async () => {
             }
         }
     });
+
+    // Cleanup de Cache de Aparição e Streaks
+    if (state.streaksCache.has(habit.id)) {
+        state.streaksCache.delete(habit.id);
+    }
+    if (state.habitAppearanceCache.has(habit.id)) {
+        state.habitAppearanceCache.delete(habit.id);
+    }
 
     // 4. Limpeza Profunda de Arquivos Mortos (Background Worker)
     runWorkerTask<Record<string, any>>('prune-habit', { 
@@ -359,9 +359,10 @@ export function markAllHabitsForDate(dateISO: string, status: 'completed' | 'sno
             invalidateCachesForDateChange(dateISO, BATCH_IDS_POOL); 
             if (status === 'completed') BATCH_HABITS_POOL.forEach(h => _checkStreakMilestones(h, dateISO)); 
             
-            // REDUNDANCY FIX: _notifyChanges(false) already triggers 'render-app' which rebuilds the UI.
-            // Calling updateDayVisuals here causes a double-paint or layout thrashing just before the rebuild.
-            // Removing the explicit surgical call as the batch operation warrants a full UI refresh anyway.
+            // BATCH OPTIMIZATION: Para mudanças em massa (Completar Dia), ainda usamos o refresh completo 
+            // ou podemos chamar updateDayVisuals se quisermos (já que todos os IDs afetados são do mesmo dia).
+            // Como afeta potencialmente todo o gráfico e visual do dia, usar _notifyChanges com updateDayVisuals é seguro.
+            requestAnimationFrame(() => updateDayVisuals(dateISO));
             _notifyChanges(false); 
         }
     } finally { _isBatchOpActive = false; }
@@ -434,10 +435,10 @@ export function handleDayTransition() {
     const today = getTodayUTCIso(); 
     clearActiveHabitsCache(); 
     
-    // ✅ Limpar caches antigos para evitar memory leaks
+    // Limpeza de caches antigos para prevenir Memory Leaks
     pruneHabitAppearanceCache();
     pruneStreaksCache();
-    
+
     state.uiDirtyState.calendarVisuals = state.uiDirtyState.habitListStructure = state.uiDirtyState.chartData = true; 
     state.calendarDates = []; 
     if (state.selectedDate !== today) state.selectedDate = today; 

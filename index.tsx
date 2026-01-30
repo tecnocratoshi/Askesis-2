@@ -25,16 +25,10 @@ import { renderApp, initI18n, updateUIText } from './render';
 import { setupEventListeners } from './listeners';
 import { handleDayTransition, performArchivalCheck } from './services/habitActions';
 import { initSync } from './listeners/sync';
-import { fetchStateFromCloud, syncStateWithCloud, setSyncStatus, printSyncDiagnostics } from './services/cloud';
-// Expor funções de debug no console global
-if (typeof window !== 'undefined') {
-    (window as any).printSyncDiagnostics = printSyncDiagnostics;
-}
+import { fetchStateFromCloud, syncStateWithCloud, setSyncStatus } from './services/cloud';
 import { hasLocalSyncKey, initAuth } from './services/api';
 import { updateAppBadge } from './services/badge';
 import { setupMidnightLoop } from './utils';
-import { setupErrorBoundary } from './render/errorBoundary';
-import { logger } from './services/logger';
 
 // --- AUTO-HEALING & INTEGRITY CHECK ---
 const BOOT_ATTEMPTS_KEY = 'askesis_boot_attempts';
@@ -151,12 +145,6 @@ async function init(loader: HTMLElement | null) {
         delete (window as any).bootWatchdog;
     }
 
-    // Setup error boundary e logger
-    if (loader?.parentElement) {
-        setupErrorBoundary(loader.parentElement);
-    }
-    logger.info('Application initialization started', { module: 'bootstrap' });
-
     await initAuth();
     
     await Promise.all([initI18n(), updateUIText()]);
@@ -168,7 +156,6 @@ async function init(loader: HTMLElement | null) {
     renderApp(); 
     
     updateAppBadge();
-    logger.info('Application fully initialized and ready', { module: 'bootstrap' });
     finalizeInit(loader);
     
     isInitialized = true;
@@ -181,7 +168,7 @@ const startApp = () => {
     if (isInitializing || isInitialized) return;
     const loader = document.getElementById('initial-loader');
     init(loader).catch(err => {
-        logger.error("Boot failed", { module: 'bootstrap' }, err);
+        console.error("Boot failed:", err);
         isInitializing = false;
         if ((window as any).showFatalError) {
             (window as any).showFatalError("Erro na inicialização: " + (err.message || err));
