@@ -214,6 +214,9 @@ export function openEditModal(habit: any, targetDateOverride?: string) {
     if (isN) {
         // Para novos hábitos (a partir de template ou customizado), não há risco de mutação
         fd = { icon: HABIT_ICONS.custom, color: _getLeastUsedColor(), times: ['Morning'], goal: { type: 'check' }, frequency: { type: 'daily' }, name: '', subtitleKey: 'customHabitSubtitle', ...habit };
+        if (state.pendingHabitTime) {
+            fd.times = [state.pendingHabitTime];
+        }
     } else {
         // Para edição, cria cópias defensivas para isolar o formulário do estado original
         const scheduleToEdit = getScheduleForDate(habit, safe) || habit.scheduleHistory[0];
@@ -230,6 +233,8 @@ export function openEditModal(habit: any, targetDateOverride?: string) {
             goal: { ...scheduleToEdit.goal }
         };
     }
+
+    state.pendingHabitTime = null;
 
     state.editingHabit = { isNew: isN, habitId: isN ? undefined : habit.id, originalData: isN ? undefined : habit, formData: fd, targetDate: safe };
     const ni = ui.editHabitForm.elements.namedItem('habit-name') as HTMLInputElement;

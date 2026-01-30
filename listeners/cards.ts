@@ -93,6 +93,10 @@ const _handleContainerClick = (e: MouseEvent) => {
     if (!el) return;
 
     if (el.classList.contains(CSS_CLASSES.EMPTY_GROUP_PLACEHOLDER)) {
+        const time = el.dataset.time
+            || el.closest<HTMLElement>('[data-time]')?.dataset.time
+            || el.closest<HTMLElement>('[data-time-wrapper]')?.dataset.timeWrapper;
+        state.pendingHabitTime = (time as TimeOfDay) || null;
         triggerHaptic('light'); renderExploreHabits(); openModal(ui.exploreModal); return;
     }
 

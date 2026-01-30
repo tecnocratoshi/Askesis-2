@@ -144,6 +144,7 @@ const _handleFabClick = () => {
     if (ui.exploreModal.classList.contains('visible')) return;
 
     triggerHaptic('light');
+    state.pendingHabitTime = null;
     renderExploreHabits();
     openModal(ui.exploreModal);
 };

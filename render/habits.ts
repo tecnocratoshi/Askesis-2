@@ -249,6 +249,7 @@ export function renderHabits() {
             if (!ph) {
                 ph = getPlaceholderTemplate().cloneNode(true) as HTMLElement;
             }
+            ph.dataset.time = time;
             ph.classList.toggle('show-smart-placeholder', isSmart);
             const iconHtml = isSmart ? `<span class="placeholder-icon-generic">${empty.map(getTimeOfDayIcon).join('<span class="icon-separator">/</span>')}</span><span class="placeholder-icon-specific">${getTimeOfDayIcon(time)}</span>` : `<span class="placeholder-icon-specific">${getTimeOfDayIcon(time)}</span>`;
             ph.innerHTML = `<div class="time-of-day-icon">${iconHtml}</div><span class="placeholder-arrow">→</span><span>${t('dragToAddHabit')}</span>`;
