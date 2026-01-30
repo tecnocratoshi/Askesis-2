@@ -4,6 +4,9 @@
   "version": "1.0.0",
   "description": "A dynamic habit tracker with data visualization and personalized AI-powered feedback.",
   "scripts": {
+    "clean": "rm -rf public",
+    "prebuild": "npm run clean",
+    "predev": "npm run clean",
     "dev": "node build.js",
     "build": "NODE_ENV=production node build.js",
     "test": "vitest run",
