@@ -47,18 +47,32 @@ function updateCachedLayoutValues() {
     SwipeState.hasTypedOM = typeof window !== 'undefined' && !!(window.CSS && (window as any).CSSTranslate && CSS.px);
 }
 
-function _finalizeSwipeState(deltaX: number) {
+function _finalizeSwipeState(deltaX: number): boolean {
     const { card, wasOpenLeft, wasOpenRight } = SwipeState;
-    if (!card) return;
+    if (!card) return false;
+    let didChange = false;
 
     if (wasOpenLeft) {
-        if (deltaX < -ACTION_THRESHOLD) card.classList.remove(CSS_CLASSES.IS_OPEN_LEFT);
+        if (deltaX < -ACTION_THRESHOLD) {
+            card.classList.remove(CSS_CLASSES.IS_OPEN_LEFT);
+            didChange = true;
+        }
     } else if (wasOpenRight) {
-        if (deltaX > ACTION_THRESHOLD) card.classList.remove(CSS_CLASSES.IS_OPEN_RIGHT);
+        if (deltaX > ACTION_THRESHOLD) {
+            card.classList.remove(CSS_CLASSES.IS_OPEN_RIGHT);
+            didChange = true;
+        }
     } else {
-        if (deltaX > ACTION_THRESHOLD) card.classList.add(CSS_CLASSES.IS_OPEN_LEFT);
-        else if (deltaX < -ACTION_THRESHOLD) card.classList.add(CSS_CLASSES.IS_OPEN_RIGHT);
+        if (deltaX > ACTION_THRESHOLD) {
+            card.classList.add(CSS_CLASSES.IS_OPEN_LEFT);
+            didChange = true;
+        } else if (deltaX < -ACTION_THRESHOLD) {
+            card.classList.add(CSS_CLASSES.IS_OPEN_RIGHT);
+            didChange = true;
+        }
     }
+
+    return didChange;
 }
 
 function _blockSubsequentClick(deltaX: number) {
@@ -83,6 +97,15 @@ const _updateVisuals = () => {
     if (SwipeState.wasOpenLeft) tx += SwipeState.actionWidth;
     if (SwipeState.wasOpenRight) tx -= SwipeState.actionWidth;
 
+    // Resistência após ultrapassar a largura do swipe
+    const absTx = tx < 0 ? -tx : tx;
+    const maxReveal = SwipeState.actionWidth * 1.2;
+    if (absTx > maxReveal) {
+        const over = absTx - maxReveal;
+        const resisted = maxReveal + over * 0.35;
+        tx = (tx < 0 ? -resisted : resisted) | 0;
+    }
+
     // BLEEDING-EDGE PERF (CSS Typed OM): No "hot path" do gesto de swipe,
     // atualizamos o `transform` diretamente no motor de composição do navegador
     // sem o custo de serializar/parsear strings, garantindo a máxima fluidez.
@@ -94,7 +117,7 @@ const _updateVisuals = () => {
 
     const absX = tx < 0 ? -tx : tx;
     if (!SwipeState.hasHaptics && absX > HAPTIC_THRESHOLD) {
-        triggerHaptic('light'); SwipeState.hasHaptics = 1;
+        triggerHaptic('selection'); SwipeState.hasHaptics = 1;
     } else if (SwipeState.hasHaptics && absX < HAPTIC_THRESHOLD) {
         SwipeState.hasHaptics = 0;
     }
@@ -138,6 +161,7 @@ const _handlePointerMove = (e: PointerEvent) => {
             if (dx > dy) {
                 // Horizontal swipe confirmed
                 SwipeState.direction = DIR_HORIZ;
+            SwipeState.startX = SwipeState.currentX;
                 SwipeState.isActive = 1;
                 document.body.classList.add('is-interaction-active');
                 SwipeState.card.classList.add(CSS_CLASSES.IS_SWIPING);
@@ -164,7 +188,10 @@ const _handlePointerMove = (e: PointerEvent) => {
 const _handlePointerUp = () => {
     if (SwipeState.card && SwipeState.direction === DIR_HORIZ) {
         const dx = (SwipeState.currentX - SwipeState.startX) | 0;
-        _finalizeSwipeState(dx); _blockSubsequentClick(dx);
+        const threshold = Math.max(ACTION_THRESHOLD, SwipeState.actionWidth * 0.35);
+        const didChange = _finalizeSwipeState(dx > 0 ? threshold <= dx ? dx : 0 : threshold <= -dx ? dx : 0);
+        if (didChange) triggerHaptic('light');
+        _blockSubsequentClick(dx);
     }
     _reset();
 };
