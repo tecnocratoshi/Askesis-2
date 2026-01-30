@@ -125,13 +125,6 @@ const _updateVisuals = () => {
         SwipeState.content.style.transform = `translateX(${tx}px)`;
     }
 
-    const absX = tx < 0 ? -tx : tx;
-    if (!SwipeState.hasHaptics && absX > HAPTIC_THRESHOLD) {
-        triggerHaptic('selection'); SwipeState.hasHaptics = 1;
-    } else if (SwipeState.hasHaptics && absX < HAPTIC_THRESHOLD) {
-        SwipeState.hasHaptics = 0;
-        SwipeState.overshootStep = 0;
-    }
     SwipeState.rafId = 0;
 };
 
@@ -191,6 +184,16 @@ const _handlePointerMove = (e: PointerEvent) => {
     // Process horizontal swipe
     if (SwipeState.direction === DIR_HORIZ) {
         e.preventDefault(); // GESTURE LOCK: Previne scroll vertical do navegador
+        let dx = (SwipeState.currentX - SwipeState.startX) | 0;
+        if (SwipeState.wasOpenLeft) dx += SwipeState.actionWidth;
+        if (SwipeState.wasOpenRight) dx -= SwipeState.actionWidth;
+        const absX = dx < 0 ? -dx : dx;
+        if (!SwipeState.hasHaptics && absX > HAPTIC_THRESHOLD) {
+            triggerHaptic('selection'); SwipeState.hasHaptics = 1;
+        } else if (SwipeState.hasHaptics && absX < HAPTIC_THRESHOLD) {
+            SwipeState.hasHaptics = 0;
+            SwipeState.overshootStep = 0;
+        }
         if (!SwipeState.rafId) {
             SwipeState.rafId = requestAnimationFrame(_updateVisuals);
         }
