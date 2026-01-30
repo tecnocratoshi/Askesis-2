@@ -103,13 +103,15 @@ const _updateVisuals = () => {
     const maxReveal = SwipeState.actionWidth;
     if (absTx > maxReveal) {
         const over = absTx - maxReveal;
-        const resisted = maxReveal + over * 0.15;
+        const resisted = maxReveal + over * 0.10;
         tx = (tx < 0 ? -resisted : resisted) | 0;
 
-        const stepSize = SwipeState.actionWidth * 0.15;
+        const stepSize = SwipeState.actionWidth * 0.10;
         const step = Math.floor(over / stepSize);
         if (step > SwipeState.overshootStep) {
-            triggerHaptic(step >= 2 ? 'heavy' : 'medium');
+            if (step >= 3) triggerHaptic('heavy');
+            else if (step === 2) triggerHaptic('medium');
+            else triggerHaptic('light');
             SwipeState.overshootStep = step;
         }
     } else if (SwipeState.overshootStep) {
@@ -203,7 +205,7 @@ const _handlePointerMove = (e: PointerEvent) => {
 const _handlePointerUp = () => {
     if (SwipeState.card && SwipeState.direction === DIR_HORIZ) {
         const dx = (SwipeState.currentX - SwipeState.startX) | 0;
-        const threshold = Math.max(ACTION_THRESHOLD, SwipeState.actionWidth * 0.35);
+        const threshold = Math.max(ACTION_THRESHOLD, SwipeState.actionWidth * 0.45);
         const didChange = _finalizeSwipeState(dx > 0 ? threshold <= dx ? dx : 0 : threshold <= -dx ? dx : 0);
         if (didChange) triggerHaptic('light');
         _blockSubsequentClick(dx);
