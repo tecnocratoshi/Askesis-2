@@ -9,7 +9,7 @@
  */
 
 import { ui } from './render/ui';
-import { renderApp, renderAINotificationState, updateNotificationUI, initModalEngine, getCachedHabitCard, updateHabitCardElement } from './render';
+import { renderApp, renderAINotificationState, updateNotificationUI, initModalEngine, getCachedHabitCard, updateHabitCardElement, updateDayVisuals } from './render';
 import { setupModalListeners } from './listeners/modals';
 import { setupCardListeners } from './listeners/cards';
 import { setupDragHandler } from './listeners/drag';
@@ -85,7 +85,7 @@ const _handleServiceWorkerMessage = (event: MessageEvent) => {
 };
 
 const _handleCardUpdate = (e: Event) => {
-    const { habitId, time } = (e as CustomEvent).detail;
+    const { habitId, time, date } = (e as CustomEvent).detail;
     const habit = state.habits.find(h => h.id === habitId);
     let cardElement = getCachedHabitCard(habitId, time);
     if (!cardElement) cardElement = document.querySelector(`.habit-card[data-habit-id="${habitId}"][data-time="${time}"]`) as HTMLElement;
@@ -93,6 +93,7 @@ const _handleCardUpdate = (e: Event) => {
         const shouldAnimate = e.type === 'card-status-changed';
         updateHabitCardElement(cardElement, habit, time, undefined, { animate: shouldAnimate });
     }
+    updateDayVisuals(date || state.selectedDate);
 };
 
 export function setupEventListeners() {
