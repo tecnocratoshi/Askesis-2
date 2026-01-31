@@ -79,6 +79,24 @@ const _getCacheKey = (habitId: string, time: TimeOfDay): string => `${habitId}|$
 export const clearHabitDomCache = () => habitElementCache.clear();
 export const getCachedHabitCard = (id: string, t: TimeOfDay) => habitElementCache.get(_getCacheKey(id, t));
 
+/**
+ * SURGICAL UPDATE: Atualiza um único card in-place sem destruir o nó DOM.
+ * Usado para mudanças de estado (toggle) que não afetam a estrutura da lista.
+ * Preserva pointer capture e física de swipe ativa.
+ */
+export function updateSingleHabitCard(habitId: string, time: TimeOfDay): boolean {
+    const key = _getCacheKey(habitId, time);
+    const card = habitElementCache.get(key);
+    if (!card || !card.isConnected) return false;
+    
+    const habit = state.habits.find(h => h.id === habitId);
+    if (!habit) return false;
+    
+    const dInfo = getHabitDailyInfoForDate(state.selectedDate);
+    updateHabitCardElement(card, habit, time, dInfo, { animate: true });
+    return true;
+}
+
 function _renderPendingGoalControls(habit: Habit, time: TimeOfDay, dayData: HabitDayData | undefined, els: CardElements) {
     const schedule = getHabitPropertiesForDate(habit, state.selectedDate);
     if (!schedule) { if (els.goal.hasChildNodes()) els.goal.replaceChildren(); return; }
@@ -202,7 +220,10 @@ export function createHabitCardElement(habit: Habit, time: TimeOfDay, preInfo?: 
 }
 
 export function renderHabits() {
-    if (document.body.classList.contains('is-interaction-active') || !state.uiDirtyState.habitListStructure) return;
+    // SURGICAL REACTIVITY: Evita re-render destrutivo durante qualquer fase de interação.
+    // is-interaction-active = swipe/drag confirmado, is-swipe-pending = pointerdown capturado (detectando intenção)
+    const body = document.body.classList;
+    if (body.contains('is-interaction-active') || body.contains('is-swipe-pending') || !state.uiDirtyState.habitListStructure) return;
     const selDate = parseUTCIsoDate(state.selectedDate), dInfo = getHabitDailyInfoForDate(state.selectedDate);
     const active = getActiveHabitsForDate(state.selectedDate, selDate);
     
@@ -231,7 +252,9 @@ export function renderHabits() {
 
                 let card = habitElementCache.get(key);
                 if (card) {
-                    card.classList.remove(CSS_CLASSES.IS_OPEN_LEFT, CSS_CLASSES.IS_OPEN_RIGHT, CSS_CLASSES.IS_SWIPING, CSS_CLASSES.DRAGGING);
+                    // SURGICAL REACTIVITY: Preserva classes de interação ativa (swipe/drag) durante re-render.
+                    // IS_SWIPING e DRAGGING são gerenciadas pelos seus respectivos sistemas de gestos.
+                    card.classList.remove(CSS_CLASSES.IS_OPEN_LEFT, CSS_CLASSES.IS_OPEN_RIGHT);
                     updateHabitCardElement(card, habit, time, dInfo);
                 } else {
                     card = createHabitCardElement(habit, time, dInfo);

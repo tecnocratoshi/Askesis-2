@@ -113,7 +113,7 @@ const _reset = () => {
             content.draggable = true;
         }
     }
-    document.body.classList.remove('is-interaction-active');
+    document.body.classList.remove('is-interaction-active', 'is-swipe-pending');
     if (state.uiDirtyState.habitListStructure) requestAnimationFrame(() => renderApp());
     
     window.removeEventListener('pointermove', _handlePointerMove);
@@ -186,6 +186,10 @@ export function setupSwipeHandler(container: HTMLElement) {
         SwipeState.wasOpenLeft = card.classList.contains(CSS_CLASSES.IS_OPEN_LEFT) ? 1 : 0;
         SwipeState.wasOpenRight = card.classList.contains(CSS_CLASSES.IS_OPEN_RIGHT) ? 1 : 0;
         SwipeState.hasHaptics = 0;
+        
+        // EARLY LOCK: Marca o body como "potencialmente em interação" para prevenir
+        // que clicks rápidos durante a detecção de intenção causem re-renders destrutivos.
+        document.body.classList.add('is-swipe-pending');
 
         window.addEventListener('pointermove', _handlePointerMove, { passive: false });
         window.addEventListener('pointerup', _handlePointerUp);
