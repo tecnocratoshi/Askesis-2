@@ -18,7 +18,7 @@ const CORS_HEADERS = {
   'Access-Control-Allow-Headers': 'Content-Type',
 };
 
-const API_KEY = process.env.API_KEY;
+const API_KEY = process.env.GEMINI_API_KEY || process.env.API_KEY;
 const MODEL_NAME = 'gemini-3-flash-preview';
 let aiClient: GoogleGenAI | null = null;
 
