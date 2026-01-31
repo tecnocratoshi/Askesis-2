@@ -83,15 +83,6 @@ const _updateVisuals = () => {
     if (SwipeState.wasOpenLeft) tx += SwipeState.actionWidth;
     if (SwipeState.wasOpenRight) tx -= SwipeState.actionWidth;
 
-    // Resistência após ultrapassar a largura do swipe
-    const absTx = tx < 0 ? -tx : tx;
-    const maxReveal = SwipeState.actionWidth * 1.2;
-    if (absTx > maxReveal) {
-        const over = absTx - maxReveal;
-        const resisted = maxReveal + over * 0.35;
-        tx = (tx < 0 ? -resisted : resisted) | 0;
-    }
-
     // BLEEDING-EDGE PERF (CSS Typed OM): No "hot path" do gesto de swipe,
     // atualizamos o `transform` diretamente no motor de composição do navegador
     // sem o custo de serializar/parsear strings, garantindo a máxima fluidez.
@@ -147,7 +138,6 @@ const _handlePointerMove = (e: PointerEvent) => {
             if (dx > dy) {
                 // Horizontal swipe confirmed
                 SwipeState.direction = DIR_HORIZ;
-            SwipeState.startX = SwipeState.currentX;
                 SwipeState.isActive = 1;
                 document.body.classList.add('is-interaction-active');
                 SwipeState.card.classList.add(CSS_CLASSES.IS_SWIPING);
@@ -174,9 +164,7 @@ const _handlePointerMove = (e: PointerEvent) => {
 const _handlePointerUp = () => {
     if (SwipeState.card && SwipeState.direction === DIR_HORIZ) {
         const dx = (SwipeState.currentX - SwipeState.startX) | 0;
-        const threshold = Math.max(ACTION_THRESHOLD, SwipeState.actionWidth * 0.35);
-        _finalizeSwipeState(dx > 0 ? threshold <= dx ? dx : 0 : threshold <= -dx ? dx : 0);
-        _blockSubsequentClick(dx);
+        _finalizeSwipeState(dx); _blockSubsequentClick(dx);
     }
     _reset();
 };
