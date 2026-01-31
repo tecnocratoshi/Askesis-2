@@ -66,8 +66,7 @@ const DragState = {
     
     // Scroll
     scrollSpeed: 0,
-    rafId: 0,
-    draggableElements: null as HTMLElement[] | null
+    rafId: 0
 };
 
 // --- HELPER GEOMÉTRICO (Magnetic Insertion) ---
@@ -76,8 +75,9 @@ const DragState = {
  * Permite inserir entre cartões mesmo arrastando nos gaps.
  * OTIMIZAÇÃO: Loop imperativo para evitar alocação de objetos (Zero-GC).
  */
-function getDragAfterElement(container: HTMLElement, y: number, elements?: HTMLElement[]): HTMLElement | null {
-    const draggableElements = elements || Array.from(container.querySelectorAll(DRAGGABLE_SELECTOR)) as HTMLElement[];
+function getDragAfterElement(container: HTMLElement, y: number): HTMLElement | null {
+    // PERF: Usa seletor hoistado para evitar concatenação de strings a cada frame
+    const draggableElements = container.querySelectorAll(DRAGGABLE_SELECTOR);
     
     let closestEl: HTMLElement | null = null;
     let closestOffset = Number.NEGATIVE_INFINITY;
@@ -253,7 +253,7 @@ const _handleDragOver = (e: DragEvent) => {
 
     // --- 4. Calcular Posição de Inserção (Reorder Preciso) ---
     if (isValid) {
-        const afterElement = getDragAfterElement(dropZone, y, DragState.draggableElements || undefined);
+        const afterElement = getDragAfterElement(dropZone, y);
         
         if (afterElement) {
             DragState.targetCard = afterElement;
@@ -276,7 +276,7 @@ const _handleDragOver = (e: DragEvent) => {
     }
     
     // Atualiza o efeito do cursor
-    if (e.dataTransfer) e.dataTransfer.dropEffect = isValid ? 'move' : 'none';
+    e.dataTransfer!.dropEffect = isValid ? 'move' : 'none';
 };
 
 const _handleDrop = (e: DragEvent) => {
@@ -349,20 +349,12 @@ const _reset = () => {
 
     // Clear State
     DragState.isActive = false;
-    DragState.isValidDrop = false;
     DragState.sourceEl = null;
-    DragState.sourceId = null;
-    DragState.sourceTime = null;
-    DragState.cachedSchedule = null;
     DragState.targetZone = null;
     DragState.targetCard = null;
     DragState.renderedZone = null;
-    DragState.insertPos = null;
     DragState.scrollSpeed = 0;
     DragState.containerRect = null; // Clear Cache
-    DragState.indicator = null;
-    DragState.rafId = 0;
-    DragState.draggableElements = null;
 };
 
 const _handleDragStart = (e: DragEvent) => {
@@ -395,9 +387,8 @@ const _handleDragStart = (e: DragEvent) => {
     }
 
     // Configura Drag Data
-    if (!e.dataTransfer) return;
-    e.dataTransfer.effectAllowed = 'move';
-    e.dataTransfer.setData('text/plain', DragState.sourceId);
+    e.dataTransfer!.effectAllowed = 'move';
+    e.dataTransfer!.setData('text/plain', DragState.sourceId);
 
     // Cria Ghost Image Customizada (Visual)
     const content = card.querySelector<HTMLElement>(DOM_SELECTORS.HABIT_CONTENT_WRAPPER);
@@ -445,7 +436,7 @@ const _handleDragStart = (e: DragEvent) => {
         const dragX = Math.max(0, e.clientX - rect.left);
         const dragY = Math.max(0, e.clientY - rect.top);
 
-        e.dataTransfer.setDragImage(ghost, dragX, dragY);
+        e.dataTransfer!.setDragImage(ghost, dragX, dragY);
         
         // Cleanup ghost com segurança (setTimeout garante que a snapshot foi tirada)
         setTimeout(() => ghost.remove(), 0);
@@ -454,11 +445,6 @@ const _handleDragStart = (e: DragEvent) => {
     // Cria Indicador de Drop
     DragState.indicator = document.createElement('div');
     DragState.indicator.className = 'drop-indicator';
-
-    // Cache de elementos draggables para reduzir querySelectorAll no dragover
-    if (DragState.container) {
-        DragState.draggableElements = Array.from(DragState.container.querySelectorAll(DRAGGABLE_SELECTOR)) as HTMLElement[];
-    }
 
     // Configura Listeners Globais
     document.addEventListener('dragover', _handleDragOver);

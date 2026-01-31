@@ -36,9 +36,7 @@ const SwipeState = {
     isActive: 0, startX: 0, startY: 0, currentX: 0, direction: DIR_NONE,
     wasOpenLeft: 0, wasOpenRight: 0, actionWidth: 60, pointerId: -1,
     rafId: 0, hasHaptics: 0, card: null as HTMLElement | null,
-    content: null as HTMLElement | null, hasTypedOM: false,
-    overshootStep: 0,
-    origTransition: '' as string | null
+    content: null as HTMLElement | null, hasTypedOM: false
 };
 
 export const isCurrentlySwiping = () => SwipeState.isActive === 1;
@@ -49,32 +47,18 @@ function updateCachedLayoutValues() {
     SwipeState.hasTypedOM = typeof window !== 'undefined' && !!(window.CSS && (window as any).CSSTranslate && CSS.px);
 }
 
-function _finalizeSwipeState(deltaX: number): boolean {
+function _finalizeSwipeState(deltaX: number) {
     const { card, wasOpenLeft, wasOpenRight } = SwipeState;
-    if (!card) return false;
-    let didChange = false;
+    if (!card) return;
 
     if (wasOpenLeft) {
-        if (deltaX < -ACTION_THRESHOLD) {
-            card.classList.remove(CSS_CLASSES.IS_OPEN_LEFT);
-            didChange = true;
-        }
+        if (deltaX < -ACTION_THRESHOLD) card.classList.remove(CSS_CLASSES.IS_OPEN_LEFT);
     } else if (wasOpenRight) {
-        if (deltaX > ACTION_THRESHOLD) {
-            card.classList.remove(CSS_CLASSES.IS_OPEN_RIGHT);
-            didChange = true;
-        }
+        if (deltaX > ACTION_THRESHOLD) card.classList.remove(CSS_CLASSES.IS_OPEN_RIGHT);
     } else {
-        if (deltaX > ACTION_THRESHOLD) {
-            card.classList.add(CSS_CLASSES.IS_OPEN_LEFT);
-            didChange = true;
-        } else if (deltaX < -ACTION_THRESHOLD) {
-            card.classList.add(CSS_CLASSES.IS_OPEN_RIGHT);
-            didChange = true;
-        }
+        if (deltaX > ACTION_THRESHOLD) card.classList.add(CSS_CLASSES.IS_OPEN_LEFT);
+        else if (deltaX < -ACTION_THRESHOLD) card.classList.add(CSS_CLASSES.IS_OPEN_RIGHT);
     }
-
-    return didChange;
 }
 
 function _blockSubsequentClick(deltaX: number) {
@@ -99,36 +83,21 @@ const _updateVisuals = () => {
     if (SwipeState.wasOpenLeft) tx += SwipeState.actionWidth;
     if (SwipeState.wasOpenRight) tx -= SwipeState.actionWidth;
 
-    // Resistência após ultrapassar a largura do swipe
-    const absTx = tx < 0 ? -tx : tx;
-    const maxReveal = SwipeState.actionWidth;
-    if (absTx > maxReveal) {
-        const over = absTx - maxReveal;
-        const resisted = maxReveal + (over * 0.08) / (1 + (over / (maxReveal * 1.2)));
-        tx = (tx < 0 ? -resisted : resisted) | 0;
-
-        const stepSize = SwipeState.actionWidth * 0.08;
-        const step = Math.floor(over / stepSize);
-        if (step > SwipeState.overshootStep) {
-            if (step >= 4) triggerHaptic('heavy');
-            else if (step === 3) triggerHaptic('medium');
-            else triggerHaptic('light');
-            SwipeState.overshootStep = step;
-        }
-    } else if (SwipeState.overshootStep) {
-        SwipeState.overshootStep = 0;
-    }
-
     // BLEEDING-EDGE PERF (CSS Typed OM): No "hot path" do gesto de swipe,
     // atualizamos o `transform` diretamente no motor de composição do navegador
     // sem o custo de serializar/parsear strings, garantindo a máxima fluidez.
     if (SwipeState.hasTypedOM && SwipeState.content.attributeStyleMap) {
         SwipeState.content.attributeStyleMap.set('transform', new (window as any).CSSTranslate(CSS.px(tx), CSS.px(0)));
     } else {
-        if (SwipeState.content) SwipeState.content.style.transition = 'none';
         SwipeState.content.style.transform = `translateX(${tx}px)`;
     }
 
+    const absX = tx < 0 ? -tx : tx;
+    if (!SwipeState.hasHaptics && absX > HAPTIC_THRESHOLD) {
+        triggerHaptic('light'); SwipeState.hasHaptics = 1;
+    } else if (SwipeState.hasHaptics && absX < HAPTIC_THRESHOLD) {
+        SwipeState.hasHaptics = 0;
+    }
     SwipeState.rafId = 0;
 };
 
@@ -139,17 +108,12 @@ const _reset = () => {
         if (pointerId !== -1) try { card.releasePointerCapture(pointerId); } catch(e){}
         card.classList.remove(CSS_CLASSES.IS_SWIPING);
         if (content) {
-            if (SwipeState.origTransition !== null) {
-                content.style.transition = SwipeState.origTransition;
-            }
             if (SwipeState.hasTypedOM && content.attributeStyleMap) content.attributeStyleMap.clear();
             else content.style.transform = '';
             content.draggable = true;
         }
     }
-    SwipeState.origTransition = null;
     document.body.classList.remove('is-interaction-active');
-    document.body.classList.remove('is-swiping-active');
     if (state.uiDirtyState.habitListStructure) requestAnimationFrame(() => renderApp());
     
     window.removeEventListener('pointermove', _handlePointerMove);
@@ -157,7 +121,6 @@ const _reset = () => {
     window.removeEventListener('pointercancel', _reset);
     SwipeState.card = SwipeState.content = null;
     SwipeState.isActive = 0; SwipeState.direction = DIR_NONE; SwipeState.pointerId = -1;
-    SwipeState.overshootStep = 0;
 };
 
 const _handlePointerMove = (e: PointerEvent) => {
@@ -175,10 +138,8 @@ const _handlePointerMove = (e: PointerEvent) => {
             if (dx > dy) {
                 // Horizontal swipe confirmed
                 SwipeState.direction = DIR_HORIZ;
-                SwipeState.startX = SwipeState.currentX;
                 SwipeState.isActive = 1;
                 document.body.classList.add('is-interaction-active');
-                document.body.classList.add('is-swiping-active');
                 SwipeState.card.classList.add(CSS_CLASSES.IS_SWIPING);
                 if (SwipeState.content) SwipeState.content.draggable = false;
                 try { SwipeState.card.setPointerCapture(e.pointerId); SwipeState.pointerId = e.pointerId; } catch(e) {}
@@ -194,16 +155,6 @@ const _handlePointerMove = (e: PointerEvent) => {
     // Process horizontal swipe
     if (SwipeState.direction === DIR_HORIZ) {
         e.preventDefault(); // GESTURE LOCK: Previne scroll vertical do navegador
-        let dx = (SwipeState.currentX - SwipeState.startX) | 0;
-        if (SwipeState.wasOpenLeft) dx += SwipeState.actionWidth;
-        if (SwipeState.wasOpenRight) dx -= SwipeState.actionWidth;
-        const absX = dx < 0 ? -dx : dx;
-        if (!SwipeState.hasHaptics && absX > HAPTIC_THRESHOLD) {
-            triggerHaptic('selection'); SwipeState.hasHaptics = 1;
-        } else if (SwipeState.hasHaptics && absX < HAPTIC_THRESHOLD) {
-            SwipeState.hasHaptics = 0;
-            SwipeState.overshootStep = 0;
-        }
         if (!SwipeState.rafId) {
             SwipeState.rafId = requestAnimationFrame(_updateVisuals);
         }
@@ -213,10 +164,7 @@ const _handlePointerMove = (e: PointerEvent) => {
 const _handlePointerUp = () => {
     if (SwipeState.card && SwipeState.direction === DIR_HORIZ) {
         const dx = (SwipeState.currentX - SwipeState.startX) | 0;
-        const threshold = Math.max(ACTION_THRESHOLD, SwipeState.actionWidth * 0.55);
-        const didChange = _finalizeSwipeState(dx > 0 ? threshold <= dx ? dx : 0 : threshold <= -dx ? dx : 0);
-        if (didChange) triggerHaptic('light');
-        _blockSubsequentClick(dx);
+        _finalizeSwipeState(dx); _blockSubsequentClick(dx);
     }
     _reset();
 };
@@ -238,14 +186,6 @@ export function setupSwipeHandler(container: HTMLElement) {
         SwipeState.wasOpenLeft = card.classList.contains(CSS_CLASSES.IS_OPEN_LEFT) ? 1 : 0;
         SwipeState.wasOpenRight = card.classList.contains(CSS_CLASSES.IS_OPEN_RIGHT) ? 1 : 0;
         SwipeState.hasHaptics = 0;
-
-        // Preparar para swipe imediato: desativa drag e transições desde o início
-        card.classList.add(CSS_CLASSES.IS_SWIPING);
-        SwipeState.origTransition = cw.style.transition;
-        cw.style.transition = 'none';
-        cw.draggable = false;
-        document.body.classList.add('is-interaction-active');
-        document.body.classList.add('is-swiping-active');
 
         window.addEventListener('pointermove', _handlePointerMove, { passive: false });
         window.addEventListener('pointerup', _handlePointerUp);
