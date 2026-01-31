@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
 */
 
-import { createClient } from '@vercel/kv';
+import { Redis } from '@upstash/redis';
 
 export const config = {
   runtime: 'edge',
@@ -58,7 +58,7 @@ export default async function handler(req: Request) {
     context: payload?.context && typeof payload.context === 'object' ? payload.context : undefined
   };
 
-  const kv = createClient({ url: dbUrl, token: dbToken });
+  const kv = new Redis({ url: dbUrl, token: dbToken });
   const key = `telemetry:error:${safe.ts}:${Math.random().toString(36).slice(2)}`;
 
   try {
