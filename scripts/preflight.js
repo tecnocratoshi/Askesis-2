@@ -1,3 +1,5 @@
+require('dotenv').config();
+
 const REQUIRED_ENV = [
   'GEMINI_API_KEY'
 ];

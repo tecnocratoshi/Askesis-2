@@ -37,6 +37,7 @@
     "esbuild": "^0.27.2",
     "happy-dom": "^20.4.0",
     "vitest": "^4.0.18",
-    "workbox-build": "^7.3.0"
+    "workbox-build": "^7.3.0",
+    "dotenv": "^16.4.5"
   }
 }
