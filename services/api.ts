@@ -30,14 +30,35 @@ function wait(ms: number): Promise<void> {
     return new Promise(resolve => setTimeout(resolve, ms));
 }
 
-async function fetchWithTimeout(input: RequestInfo | URL, init: RequestInit, timeoutMs: number): Promise<Response> {
+function createTimeoutSignal(timeoutMs: number): AbortSignal {
+    if (typeof AbortSignal !== 'undefined' && typeof AbortSignal.timeout === 'function') {
+        return AbortSignal.timeout(timeoutMs);
+    }
+
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
-    try {
-        return await fetch(input, { ...init, signal: controller.signal });
-    } finally {
-        clearTimeout(timeoutId);
+    controller.signal.addEventListener('abort', () => clearTimeout(timeoutId), { once: true });
+    return controller.signal;
+}
+
+function mergeSignals(primary: AbortSignal, secondary?: AbortSignal): AbortSignal {
+    if (!secondary) return primary;
+
+    if (typeof AbortSignal !== 'undefined' && typeof (AbortSignal as any).any === 'function') {
+        return (AbortSignal as any).any([primary, secondary]);
     }
+
+    const controller = new AbortController();
+    const abort = () => controller.abort();
+    primary.addEventListener('abort', abort, { once: true });
+    secondary.addEventListener('abort', abort, { once: true });
+    return controller.signal;
+}
+
+async function fetchWithTimeout(input: RequestInfo | URL, init: RequestInit, timeoutMs: number): Promise<Response> {
+    const timeoutSignal = createTimeoutSignal(timeoutMs);
+    const signal = mergeSignals(timeoutSignal, init.signal);
+    return await fetch(input, { ...init, signal });
 }
 
 // --- GERENCIAMENTO DE CHAVES ---

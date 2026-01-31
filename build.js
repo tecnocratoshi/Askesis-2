@@ -3,6 +3,7 @@ const fs = require('fs/promises');
 const fsSync = require('fs');
 const path = require('path'); 
 const http = require('http');
+const { injectManifest } = require('workbox-build');
 const { handleApiSync, handleApiAnalyze } = require('./scripts/dev-api-mock.js');
 
 const isProduction = process.env.NODE_ENV === 'production';
@@ -51,18 +52,36 @@ async function atomicWrite(dest, content) {
     await fs.rename(tmp, dest);
 }
 
+async function copyWorkboxRuntime() {
+    try {
+        const src = path.resolve(__dirname, 'node_modules/workbox-sw/build/workbox-sw.js');
+        await fs.copyFile(src, toOut('workbox-sw.js'));
+    } catch (e) {
+        console.warn('⚠️ Workbox runtime not found. Install dependencies?', e.message || e);
+    }
+}
+
+async function buildServiceWorker() {
+    try {
+        await injectManifest({
+            swSrc: path.resolve(__dirname, 'sw.js'),
+            swDest: toOut('sw.js'),
+            globDirectory: outdir,
+            globPatterns: ['**/*.{html,js,css,json,svg,png,jpg,ico,woff2}'],
+            maximumFileSizeToCacheInBytes: 5 * 1024 * 1024
+        });
+    } catch (e) {
+        console.warn('⚠️ Workbox injectManifest failed', e.message || e);
+    }
+}
+
 async function copyStaticFiles() {
     await fs.mkdir(outdir, { recursive: true });
     
     await atomicWrite(toOut('index.html'), await fs.readFile('index.html', 'utf-8'));
     await fs.copyFile('manifest.json', toOut('manifest.json'));
-    
-    try {
-        const sw = await fs.readFile('sw.js', 'utf-8');
-        await atomicWrite(toOut('sw.js'), sw.replace(/const\s+CACHE_NAME\s*=\s*['"]([^'"]+)['"];/, `const CACHE_NAME = 'askesis-v${Date.now()}';`));
-    } catch (e) {
-        await fs.copyFile('sw.js', toOut('sw.js'));
-    }
+
+    await copyWorkboxRuntime();
 
     const assets = ['icons', 'locales'];
     for (const asset of assets) {
@@ -91,8 +110,11 @@ function watchStaticFiles() {
     const processChanges = async () => {
         if (isProcessing) return;
         isProcessing = true;
-        try { await copyStaticFiles(); notifyLiveReload(); } 
-        finally { isProcessing = false; }
+        try {
+            await copyStaticFiles();
+            await buildServiceWorker();
+            notifyLiveReload();
+        } finally { isProcessing = false; }
     };
 
     ['index.html', 'manifest.json', 'sw.js', 'icons', 'locales'].forEach(p => {
@@ -105,7 +127,16 @@ function watchStaticFiles() {
 async function startDevServer() {
     const ctx = await esbuild.context({
         ...esbuildOptions,
-        plugins: [{ name: 'watch-logger', setup(b) { b.onEnd(r => !r.errors.length && notifyLiveReload()); } }]
+        plugins: [{
+            name: 'watch-logger',
+            setup(b) {
+                b.onEnd(async (r) => {
+                    if (r.errors.length) return;
+                    await buildServiceWorker();
+                    notifyLiveReload();
+                });
+            }
+        }]
     });
     await ctx.watch();
 
@@ -147,5 +178,10 @@ async function startDevServer() {
 (async function() {
     await fs.rm(outdir, { recursive: true, force: true });
     await copyStaticFiles();
-    isProduction ? await esbuild.build(esbuildOptions) : await startDevServer();
+    if (isProduction) {
+        await esbuild.build(esbuildOptions);
+        await buildServiceWorker();
+    } else {
+        await startDevServer();
+    }
 })().catch(err => { console.error(err); process.exit(1); });

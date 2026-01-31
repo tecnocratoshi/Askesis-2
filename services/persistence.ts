@@ -264,6 +264,10 @@ export async function loadState(cloudState?: AppState): Promise<AppState | null>
         const runCleanup = () => pruneOrphanedDailyData(state.habits, state.dailyData);
         if ('scheduler' in window && (window as any).scheduler) {
              (window as any).scheduler.postTask(runCleanup, { priority: 'background' });
+        } else if ('requestIdleCallback' in window) {
+            requestIdleCallback(() => runCleanup());
+        } else {
+            setTimeout(runCleanup, 50);
         }
 
         document.dispatchEvent(new CustomEvent('render-app'));
