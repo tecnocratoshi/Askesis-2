@@ -6,10 +6,9 @@
   "scripts": {
     "clean": "rm -rf public",
     "prebuild": "npm run clean",
-    "preflight": "node scripts/preflight.js",
     "predev": "npm run clean",
     "dev": "node build.js",
-    "build": "npm run preflight && NODE_ENV=production node build.js",
+    "build": "NODE_ENV=production node build.js",
     "test": "vitest run",
     "test:ui": "vitest --ui",
     "test:watch": "vitest",
@@ -37,7 +36,6 @@
     "esbuild": "^0.27.2",
     "happy-dom": "^20.4.0",
     "vitest": "^4.0.18",
-    "workbox-build": "^7.3.0",
-    "dotenv": "^16.4.5"
+    "workbox-build": "^7.3.0"
   }
 }
