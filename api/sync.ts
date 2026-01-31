@@ -72,6 +72,26 @@ function sleep(ms: number) {
     return new Promise(resolve => setTimeout(resolve, ms));
 }
 
+function toConflictShards(raw: unknown): Record<string, string> {
+    const conflictShards: Record<string, string> = {};
+    if (Array.isArray(raw)) {
+        for (let i = 0; i < raw.length; i += 2) {
+            const key = raw[i];
+            const value = raw[i + 1];
+            if (typeof key === 'string' && typeof value === 'string') {
+                conflictShards[key] = value;
+            }
+        }
+        return conflictShards;
+    }
+    if (raw && typeof raw === 'object') {
+        for (const [key, value] of Object.entries(raw as Record<string, unknown>)) {
+            if (typeof value === 'string') conflictShards[key] = value;
+        }
+    }
+    return conflictShards;
+}
+
 async function applyShardsNonLua(kv: ReturnType<typeof createClient>, dataKey: string, lastModified: number, shards: Record<string, string>) {
     const currentTsRaw = await kv.hget(dataKey, 'lastModified');
     const currentTs = Number(currentTsRaw || 0);
@@ -156,11 +176,7 @@ export default async function handler(req: Request) {
                 if (fallback.type === 'ok') {
                     return new Response('{"success":true,"fallback":true}', { status: 200, headers: HEADERS_BASE });
                 }
-                const rawList = fallback.data as string[];
-                const conflictShards: Record<string, string> = {};
-                for (let i = 0; i < rawList.length; i += 2) {
-                    conflictShards[rawList[i]] = rawList[i+1];
-                }
+                const conflictShards = toConflictShards(fallback.data);
                 return new Response(JSON.stringify(conflictShards), { status: 409, headers: HEADERS_BASE });
             }
             
@@ -171,20 +187,12 @@ export default async function handler(req: Request) {
                 if (fallback.type === 'ok') {
                     return new Response('{"success":true,"fallback":true}', { status: 200, headers: HEADERS_BASE });
                 }
-                const rawList = fallback.data as string[];
-                const conflictShards: Record<string, string> = {};
-                for (let i = 0; i < rawList.length; i += 2) {
-                    conflictShards[rawList[i]] = rawList[i+1];
-                }
+                const conflictShards = toConflictShards(fallback.data);
                 return new Response(JSON.stringify(conflictShards), { status: 409, headers: HEADERS_BASE });
             }
             
             if (result[0] === 'CONFLICT') {
-                const rawList = result[1] as string[];
-                const conflictShards: Record<string, string> = {};
-                for (let i = 0; i < rawList.length; i += 2) {
-                    conflictShards[rawList[i]] = rawList[i+1];
-                }
+                const conflictShards = toConflictShards(result[1]);
                 return new Response(JSON.stringify(conflictShards), { status: 409, headers: HEADERS_BASE });
             }
             

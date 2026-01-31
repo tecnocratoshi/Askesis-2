@@ -31,7 +31,7 @@
     "@vercel/kv": "^3.0.0"
   },
   "devDependencies": {
-    "@types/node": "^20.14.8",
+    "@types/node": "^20.19.30",
     "@vitest/coverage-v8": "^4.0.18",
     "@vitest/ui": "^4.0.18",
     "esbuild": "^0.27.2",
