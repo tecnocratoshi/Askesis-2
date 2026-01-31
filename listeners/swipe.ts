@@ -47,32 +47,18 @@ function updateCachedLayoutValues() {
     SwipeState.hasTypedOM = typeof window !== 'undefined' && !!(window.CSS && (window as any).CSSTranslate && CSS.px);
 }
 
-function _finalizeSwipeState(deltaX: number): boolean {
+function _finalizeSwipeState(deltaX: number) {
     const { card, wasOpenLeft, wasOpenRight } = SwipeState;
-    if (!card) return false;
-    let didChange = false;
+    if (!card) return;
 
     if (wasOpenLeft) {
-        if (deltaX < -ACTION_THRESHOLD) {
-            card.classList.remove(CSS_CLASSES.IS_OPEN_LEFT);
-            didChange = true;
-        }
+        if (deltaX < -ACTION_THRESHOLD) card.classList.remove(CSS_CLASSES.IS_OPEN_LEFT);
     } else if (wasOpenRight) {
-        if (deltaX > ACTION_THRESHOLD) {
-            card.classList.remove(CSS_CLASSES.IS_OPEN_RIGHT);
-            didChange = true;
-        }
+        if (deltaX > ACTION_THRESHOLD) card.classList.remove(CSS_CLASSES.IS_OPEN_RIGHT);
     } else {
-        if (deltaX > ACTION_THRESHOLD) {
-            card.classList.add(CSS_CLASSES.IS_OPEN_LEFT);
-            didChange = true;
-        } else if (deltaX < -ACTION_THRESHOLD) {
-            card.classList.add(CSS_CLASSES.IS_OPEN_RIGHT);
-            didChange = true;
-        }
+        if (deltaX > ACTION_THRESHOLD) card.classList.add(CSS_CLASSES.IS_OPEN_LEFT);
+        else if (deltaX < -ACTION_THRESHOLD) card.classList.add(CSS_CLASSES.IS_OPEN_RIGHT);
     }
-
-    return didChange;
 }
 
 function _blockSubsequentClick(deltaX: number) {
@@ -117,7 +103,7 @@ const _updateVisuals = () => {
 
     const absX = tx < 0 ? -tx : tx;
     if (!SwipeState.hasHaptics && absX > HAPTIC_THRESHOLD) {
-        triggerHaptic('selection'); SwipeState.hasHaptics = 1;
+        triggerHaptic('light'); SwipeState.hasHaptics = 1;
     } else if (SwipeState.hasHaptics && absX < HAPTIC_THRESHOLD) {
         SwipeState.hasHaptics = 0;
     }
@@ -189,8 +175,7 @@ const _handlePointerUp = () => {
     if (SwipeState.card && SwipeState.direction === DIR_HORIZ) {
         const dx = (SwipeState.currentX - SwipeState.startX) | 0;
         const threshold = Math.max(ACTION_THRESHOLD, SwipeState.actionWidth * 0.35);
-        const didChange = _finalizeSwipeState(dx > 0 ? threshold <= dx ? dx : 0 : threshold <= -dx ? dx : 0);
-        if (didChange) triggerHaptic('light');
+        _finalizeSwipeState(dx > 0 ? threshold <= dx ? dx : 0 : threshold <= -dx ? dx : 0);
         _blockSubsequentClick(dx);
     }
     _reset();
