@@ -90,9 +90,14 @@ const _handleGoalInput = (wrapper: HTMLElement, hId: string, time: TimeOfDay) =>
 };
 
 const _handleContainerClick = (e: MouseEvent) => {
-    // GESTURE ISOLATION: Não processa clicks durante swipe ativo ou pendente
-    // Isso evita que o tap interfira com o swipe após algum tempo de uso
-    if (isCurrentlySwiping() || isSwipePending()) {
+    // GESTURE ISOLATION: Não processa clicks durante swipe/drag ativo ou pendente
+    // Isso evita que o tap interfira com swipe/drag após algum tempo de uso
+    if (
+        isCurrentlySwiping() ||
+        isSwipePending() ||
+        document.body.classList.contains('is-dragging-active') ||
+        document.body.classList.contains('is-interaction-active')
+    ) {
         return;
     }
     
