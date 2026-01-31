@@ -47,13 +47,34 @@ if (self.workbox) {
         ({ request }) => request.mode === 'navigate',
         new self.workbox.strategies.NetworkFirst({
             cacheName: 'pages',
-            networkTimeoutSeconds: NETWORK_TIMEOUT_MS / 1000
+            networkTimeoutSeconds: NETWORK_TIMEOUT_MS / 1000,
+            plugins: [
+                new self.workbox.cacheableResponse.CacheableResponsePlugin({ statuses: [0, 200] }),
+                new self.workbox.expiration.ExpirationPlugin({ maxEntries: 30, maxAgeSeconds: 60 * 60 * 24 * 7 })
+            ]
         })
     );
 
     self.workbox.routing.registerRoute(
         ({ request }) => ['style', 'script', 'image', 'font'].includes(request.destination),
-        new self.workbox.strategies.StaleWhileRevalidate({ cacheName: 'assets' })
+        new self.workbox.strategies.StaleWhileRevalidate({
+            cacheName: 'assets',
+            plugins: [
+                new self.workbox.cacheableResponse.CacheableResponsePlugin({ statuses: [0, 200] }),
+                new self.workbox.expiration.ExpirationPlugin({ maxEntries: 120, maxAgeSeconds: 60 * 60 * 24 * 30 })
+            ]
+        })
+    );
+
+    self.workbox.routing.registerRoute(
+        ({ url }) => url.pathname.startsWith('/locales/') || url.pathname.endsWith('/manifest.json') || url.pathname.endsWith('.json'),
+        new self.workbox.strategies.StaleWhileRevalidate({
+            cacheName: 'data',
+            plugins: [
+                new self.workbox.cacheableResponse.CacheableResponsePlugin({ statuses: [0, 200] }),
+                new self.workbox.expiration.ExpirationPlugin({ maxEntries: 50, maxAgeSeconds: 60 * 60 * 24 * 14 })
+            ]
+        })
     );
 } else {
     // --- FALLBACK: Cache manual mínimo (sem Workbox) ---
@@ -61,8 +82,6 @@ if (self.workbox) {
     const CACHE_FILES = [
         '/',
         '/index.html',
-        '/bundle.js',
-        '/bundle.css',
         '/manifest.json',
         '/locales/pt.json',
         '/locales/en.json',

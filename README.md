@@ -214,6 +214,15 @@ O Askesis opera no "Sweet Spot" da performance web, utilizando APIs nativas mode
 
 6.  **Sincronização Inteligente (Smart Merge):** Implementação de um algoritmo **CRDT-lite** (Conflict-free Replicated Data Type) para reconciliação de dados. O sistema resolve conflitos entre dispositivos offline e a nuvem usando pesos semânticos (ex: "Concluído" > "Pendente"), garantindo que o progresso do usuário nunca seja perdido.
 
+<h3>Fallbacks e Compatibilidade (Sem Overengineering)</h3>
+
+O Askesis utiliza APIs modernas quando disponíveis e aplica fallbacks simples para evitar edge-cases em browsers antigos:
+
+*   **`scheduler.postTask` → `requestIdleCallback`/`setTimeout`:** evita travas na thread principal sem depender de suporte total do navegador.
+*   **CSS Typed OM (Houdini) → `style.transform`:** mantém gestos fluídos mesmo sem Typed OM.
+*   **Service Worker (Workbox) → cache manual mínimo:** garante offline-first mesmo se o runtime do Workbox não carregar.
+*   **`AbortSignal.timeout` → `AbortController`:** timeouts confiáveis com compatibilidade ampla.
+
 ---
 
 <h2>🛠️ Instalação e Desenvolvimento</h2>
@@ -235,6 +244,34 @@ Como o Askesis é "Vanilla TypeScript" puro, não há build steps complexos de f
     *O projeto utiliza `esbuild` para Hot Module Replacement (HMR) e transpilação TS -> JS.*
 
 > **Nota importante sobre instância própria:** rodar uma versão auto-hospedada é totalmente possível, porém **reduz um dos maiores benefícios do Askesis: o anonimato coletivo**. Ao sair do conjunto de usuários compartilhado, você diminui o *anonymity set* que ajuda a diluir a identidade entre participantes.
+
+<h2>⚙️ Configuração (Onboarding Rápido)</h2>
+
+Para evitar erros de deploy, configure estas variáveis e integrações:
+
+**Variáveis de ambiente (produção/dev):**
+*   **GEMINI_API_KEY** — chave do Google Gemini usada no backend de análise.
+*   **KV_REST_API_URL / KV_REST_API_TOKEN** (ou **UPSTASH_REDIS_REST_URL / UPSTASH_REDIS_REST_TOKEN**) — credenciais do Vercel KV/Upstash para sincronização.
+
+**Integrações opcionais:**
+*   **OneSignal (push)** — configure o `appId` em [index.html](index.html). Se não usar push, o SDK falha silenciosamente.
+*   **Workbox (SW)** — o build gera o precache automaticamente; sem dependências, cai no fallback manual.
+*   **Vercel Analytics** — carregado apenas em produção.
+
+**Checklist rápido de deploy:**
+1. Defina as variáveis acima no provedor.
+2. Rode `npm run build`.
+3. Publique o conteúdo de `public/`.
+
+<h2>🧩 Tabela de Compatibilidade (APIs Modernas)</h2>
+
+| API/Feature | Uso no Askesis | Fallback | Resultado em browsers antigos |
+|---|---|---|---|
+| `scheduler.postTask` | Render/boot sem travar UI | `requestIdleCallback`/`setTimeout` | Experiência estável, porém menos fluida |
+| CSS Typed OM (Houdini) | Gestos de swipe/drag | `style.transform` | Interações funcionam sem queda crítica |
+| Service Worker + Workbox | Offline + cache inteligente | Cache manual mínimo | Offline básico mantém funcional |
+| `AbortSignal.timeout` | Timeouts de rede | `AbortController` | Timeouts confiáveis |
+| Web Workers | Cripto e tarefas pesadas | — | Sem worker, app pode ficar mais lento |
 
 ---
 

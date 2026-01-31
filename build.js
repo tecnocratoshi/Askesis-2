@@ -102,8 +102,36 @@ const esbuildOptions = {
     target: 'es2020',
     minify: isProduction,
     sourcemap: !isProduction,
-    define: { 'process.env.NODE_ENV': JSON.stringify(process.env.NODE_ENV || 'development') }
+    define: { 'process.env.NODE_ENV': JSON.stringify(process.env.NODE_ENV || 'development') },
+    entryNames: isProduction ? 'assets/[name]-[hash]' : '[name]',
+    chunkNames: isProduction ? 'assets/[name]-[hash]' : '[name]',
+    assetNames: isProduction ? 'assets/[name]-[hash]' : '[name]'
 };
+
+function normalizeOutputPath(p) {
+    const normalized = p.replace(/\\/g, '/');
+    if (normalized.startsWith(outdir.replace(/\\/g, '/'))) {
+        return path.relative(outdir, normalized).replace(/\\/g, '/');
+    }
+    return normalized;
+}
+
+function updateIndexHtmlWithHashedAssets(metafile) {
+    if (!metafile || !metafile.outputs) return;
+
+    const outputs = Object.entries(metafile.outputs);
+    const jsEntry = outputs.find(([file, info]) => info.entryPoint === 'index.tsx' && file.endsWith('.js'));
+    if (!jsEntry) return;
+
+    const jsFile = normalizeOutputPath(jsEntry[0]);
+    const cssFile = jsEntry[1].cssBundle ? normalizeOutputPath(jsEntry[1].cssBundle) : null;
+
+    const indexPath = toOut('index.html');
+    let html = fsSync.readFileSync(indexPath, 'utf-8');
+    html = html.replace(/bundle\.js/g, jsFile);
+    if (cssFile) html = html.replace(/bundle\.css/g, cssFile);
+    fsSync.writeFileSync(indexPath, html);
+}
 
 function watchStaticFiles() {
     let isProcessing = false;
@@ -179,7 +207,8 @@ async function startDevServer() {
     await fs.rm(outdir, { recursive: true, force: true });
     await copyStaticFiles();
     if (isProduction) {
-        await esbuild.build(esbuildOptions);
+        const result = await esbuild.build({ ...esbuildOptions, metafile: true });
+        updateIndexHtmlWithHashedAssets(result.metafile);
         await buildServiceWorker();
     } else {
         await startDevServer();

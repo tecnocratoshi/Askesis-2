@@ -27,6 +27,7 @@ import { handleDayTransition, performArchivalCheck } from './services/habitActio
 import { initSync } from './listeners/sync';
 import { fetchStateFromCloud, syncStateWithCloud, setSyncStatus } from './services/cloud';
 import { hasLocalSyncKey, initAuth } from './services/api';
+import { initErrorTelemetry, reportCriticalError } from './services/telemetry';
 import { updateAppBadge } from './services/badge';
 import { setupMidnightLoop, logger } from './utils';
 import { BOOT_RELOAD_DELAY_MS, BOOT_SYNC_TIMEOUT_MS } from './constants';
@@ -141,6 +142,8 @@ async function init(loader: HTMLElement | null) {
     if (isInitializing || isInitialized) return;
     isInitializing = true;
 
+    initErrorTelemetry();
+
     if ((window as any).bootWatchdog) {
         clearTimeout((window as any).bootWatchdog);
         delete (window as any).bootWatchdog;
@@ -170,6 +173,7 @@ const startApp = () => {
     const loader = document.getElementById('initial-loader');
     init(loader).catch(err => {
         logger.error('Boot failed', err);
+        reportCriticalError('fatal', err);
         isInitializing = false;
         if ((window as any).showFatalError) {
             (window as any).showFatalError("Erro na inicialização: " + (err.message || err));
