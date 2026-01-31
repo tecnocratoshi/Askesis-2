@@ -32,11 +32,18 @@ const INTENT_THRESHOLD = SWIPE_INTENT_THRESHOLD;
 const ACTION_THRESHOLD = SWIPE_ACTION_THRESHOLD;
 const HAPTIC_THRESHOLD = SWIPE_HAPTIC_THRESHOLD;
 
+// PHYSICS CONSTANTS: Resistência progressiva e haptic incremental
+const MAX_OVERSWIPE = 100;      // Máximo overswipe permitido em pixels
+const RESISTANCE_FACTOR = 0.4; // Fator de resistência após limite (0-1, menor = mais resistência)
+const HAPTIC_ZONES = [0.5, 0.75, 0.9, 1.0]; // Zonas de haptic progressivo (% do limite)
+
 const SwipeState = {
     isActive: 0, startX: 0, startY: 0, currentX: 0, direction: DIR_NONE,
     wasOpenLeft: 0, wasOpenRight: 0, actionWidth: 60, pointerId: -1,
     rafId: 0, hasHaptics: 0, card: null as HTMLElement | null,
-    content: null as HTMLElement | null, hasTypedOM: false
+    content: null as HTMLElement | null, hasTypedOM: false,
+    hapticZoneIndex: 0,         // Zona atual de haptic (para incremental)
+    lastVisualX: 0              // Última posição visual aplicada
 };
 
 export const isCurrentlySwiping = () => SwipeState.isActive === 1;
@@ -74,14 +81,67 @@ function _blockSubsequentClick(deltaX: number) {
     setTimeout(() => window.removeEventListener('click', block, true), SWIPE_BLOCK_CLICK_MS);
 }
 
+/**
+ * Aplica resistência progressiva ao movimento de swipe.
+ * Quando o usuário arrasta além do actionWidth, a resistência aumenta
+ * exponencialmente, criando uma sensação de "borracha" realista.
+ */
+function _applyResistance(rawDelta: number, actionWidth: number): number {
+    const absDelta = Math.abs(rawDelta);
+    const sign = rawDelta >= 0 ? 1 : -1;
+    
+    // Dentro do limite normal: movimento 1:1 com o dedo
+    if (absDelta <= actionWidth) {
+        return rawDelta;
+    }
+    
+    // Além do limite: resistência progressiva (diminui conforme avança)
+    const overAmount = absDelta - actionWidth;
+    const maxOver = MAX_OVERSWIPE;
+    
+    // Função de easing: quanto mais longe, maior a resistência
+    // Usa raiz quadrada para desacelerar gradualmente
+    const resistedOver = maxOver * (1 - Math.exp(-overAmount / (maxOver * RESISTANCE_FACTOR)));
+    
+    return sign * (actionWidth + resistedOver);
+}
+
+/**
+ * Haptic feedback progressivo baseado em zonas.
+ * Dispara feedback cada vez que cruza uma zona, com intensidade crescente.
+ */
+function _triggerProgressiveHaptic(progress: number) {
+    // progress: 0-1+ (pode passar de 1 quando em overswipe)
+    const clampedProgress = Math.min(progress, 1);
+    
+    for (let i = SwipeState.hapticZoneIndex; i < HAPTIC_ZONES.length; i++) {
+        if (clampedProgress >= HAPTIC_ZONES[i]) {
+            // Intensidade crescente por zona
+            const intensity: 'light' | 'medium' | 'heavy' = 
+                i < 2 ? 'light' : i < 3 ? 'medium' : 'heavy';
+            triggerHaptic(intensity);
+            SwipeState.hapticZoneIndex = i + 1;
+        }
+    }
+    
+    // Reset das zonas se voltar para trás
+    if (clampedProgress < HAPTIC_ZONES[0] && SwipeState.hapticZoneIndex > 0) {
+        SwipeState.hapticZoneIndex = 0;
+    }
+}
+
 const _updateVisuals = () => {
     if (!SwipeState.card || !SwipeState.content || SwipeState.direction !== DIR_HORIZ) {
         SwipeState.rafId = 0; return;
     }
 
-    let tx = (SwipeState.currentX - SwipeState.startX) | 0;
-    if (SwipeState.wasOpenLeft) tx += SwipeState.actionWidth;
-    if (SwipeState.wasOpenRight) tx -= SwipeState.actionWidth;
+    let rawDelta = (SwipeState.currentX - SwipeState.startX) | 0;
+    if (SwipeState.wasOpenLeft) rawDelta += SwipeState.actionWidth;
+    if (SwipeState.wasOpenRight) rawDelta -= SwipeState.actionWidth;
+
+    // Aplica resistência progressiva para movimento realista
+    const tx = _applyResistance(rawDelta, SwipeState.actionWidth) | 0;
+    SwipeState.lastVisualX = tx;
 
     // BLEEDING-EDGE PERF (CSS Typed OM): No "hot path" do gesto de swipe,
     // atualizamos o `transform` diretamente no motor de composição do navegador
@@ -92,12 +152,11 @@ const _updateVisuals = () => {
         SwipeState.content.style.transform = `translateX(${tx}px)`;
     }
 
-    const absX = tx < 0 ? -tx : tx;
-    if (!SwipeState.hasHaptics && absX > HAPTIC_THRESHOLD) {
-        triggerHaptic('light'); SwipeState.hasHaptics = 1;
-    } else if (SwipeState.hasHaptics && absX < HAPTIC_THRESHOLD) {
-        SwipeState.hasHaptics = 0;
-    }
+    // Haptic progressivo baseado no progresso em direção ao limite
+    const absRaw = Math.abs(rawDelta);
+    const progress = absRaw / SwipeState.actionWidth;
+    _triggerProgressiveHaptic(progress);
+
     SwipeState.rafId = 0;
 };
 
@@ -121,6 +180,7 @@ const _reset = () => {
     window.removeEventListener('pointercancel', _reset);
     SwipeState.card = SwipeState.content = null;
     SwipeState.isActive = 0; SwipeState.direction = DIR_NONE; SwipeState.pointerId = -1;
+    SwipeState.hapticZoneIndex = 0; SwipeState.lastVisualX = 0; // Reset physics state
 };
 
 const _handlePointerMove = (e: PointerEvent) => {
