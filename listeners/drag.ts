@@ -366,7 +366,7 @@ const _reset = () => {
 };
 
 const _handleDragStart = (e: DragEvent) => {
-    if (isCurrentlySwiping() || document.body.classList.contains('is-swiping-active')) {
+    if (isCurrentlySwiping()) {
         e.preventDefault();
         return;
     }

@@ -202,11 +202,7 @@ export function createHabitCardElement(habit: Habit, time: TimeOfDay, preInfo?: 
 }
 
 export function renderHabits() {
-    if (!state.uiDirtyState.habitListStructure) return;
-    if (document.body.classList.contains('is-swiping-active') || document.body.classList.contains('is-dragging-active')) {
-        state.uiDirtyState.habitListStructure = true;
-        return;
-    }
+    if (document.body.classList.contains('is-interaction-active') || !state.uiDirtyState.habitListStructure) return;
     const selDate = parseUTCIsoDate(state.selectedDate), dInfo = getHabitDailyInfoForDate(state.selectedDate);
     const active = getActiveHabitsForDate(state.selectedDate, selDate);
     

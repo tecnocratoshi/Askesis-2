@@ -78,9 +78,7 @@ function _finalizeSwipeState(deltaX: number): boolean {
 }
 
 function _blockSubsequentClick(deltaX: number) {
-    const abs = deltaX < 0 ? -deltaX : deltaX;
-    const threshold = Math.max(ACTION_THRESHOLD, SwipeState.actionWidth);
-    if (abs <= threshold) return;
+    if ((deltaX < 0 ? -deltaX : deltaX) <= ACTION_THRESHOLD) return;
     const block = (e: MouseEvent) => {
         const t = e.target as HTMLElement;
         if (!t.closest(DOM_SELECTORS.SWIPE_DELETE_BTN) && !t.closest(DOM_SELECTORS.SWIPE_NOTE_BTN)) {
@@ -152,9 +150,7 @@ const _reset = () => {
     SwipeState.origTransition = null;
     document.body.classList.remove('is-interaction-active');
     document.body.classList.remove('is-swiping-active');
-    if (state.uiDirtyState.habitListStructure || state.uiDirtyState.calendarVisuals) {
-        requestAnimationFrame(() => renderApp());
-    }
+    if (state.uiDirtyState.habitListStructure) requestAnimationFrame(() => renderApp());
     
     window.removeEventListener('pointermove', _handlePointerMove);
     window.removeEventListener('pointerup', _handlePointerUp);
@@ -229,7 +225,6 @@ export function setupSwipeHandler(container: HTMLElement) {
     updateCachedLayoutValues();
     container.addEventListener('pointerdown', (e) => {
         if (SwipeState.card || e.button !== 0) return;
-        if (document.body.classList.contains('is-dragging-active')) return;
         const cw = (e.target as HTMLElement).closest<HTMLElement>(DOM_SELECTORS.HABIT_CONTENT_WRAPPER);
         const card = cw?.closest<HTMLElement>(DOM_SELECTORS.HABIT_CARD);
         if (!card || !cw) return;
