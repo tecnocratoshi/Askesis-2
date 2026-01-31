@@ -24,7 +24,7 @@ import { TimeOfDay, state } from '../state';
 import { getEffectiveScheduleForHabitOnDate } from '../services/selectors';
 import { triggerHaptic } from '../utils';
 import { DOM_SELECTORS, CSS_CLASSES } from '../render/constants';
-import { isCurrentlySwiping, isSwipePending } from './swipe';
+import { isCurrentlySwiping, isSwipePending, cancelSwipeInteraction } from './swipe';
 import { renderApp } from '../render'; // CHAOS FIX: Import renderApp for catch-up
 import { DRAG_SCROLL_ZONE_PX, DRAG_MAX_SCROLL_SPEED, DRAG_DROP_INDICATOR_GAP } from '../constants';
 
@@ -366,10 +366,14 @@ const _reset = () => {
 };
 
 const _handleDragStart = (e: DragEvent) => {
-    // GESTURE ISOLATION: Não permite drag durante swipe ativo ou pendente
-    if (isCurrentlySwiping() || isSwipePending()) {
+    // GESTURE ISOLATION: Não permite drag durante swipe ativo.
+    // Se apenas houver swipe pendente (pointerdown sem intenção confirmada), cancela para permitir drag.
+    if (isCurrentlySwiping()) {
         e.preventDefault();
         return;
+    }
+    if (isSwipePending()) {
+        cancelSwipeInteraction();
     }
 
     const target = e.target as HTMLElement;

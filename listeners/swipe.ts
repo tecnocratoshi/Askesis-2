@@ -50,6 +50,9 @@ const SwipeState = {
 
 export const isCurrentlySwiping = () => SwipeState.isActive === 1;
 export const isSwipePending = () => SwipeState.card !== null;
+export const cancelSwipeInteraction = () => {
+    if (SwipeState.card) _reset();
+};
 
 function updateCachedLayoutValues() {
     const root = getComputedStyle(document.documentElement);
