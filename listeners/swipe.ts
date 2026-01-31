@@ -36,8 +36,7 @@ const SwipeState = {
     isActive: 0, startX: 0, startY: 0, currentX: 0, direction: DIR_NONE,
     wasOpenLeft: 0, wasOpenRight: 0, actionWidth: 60, pointerId: -1,
     rafId: 0, hasHaptics: 0, card: null as HTMLElement | null,
-    content: null as HTMLElement | null, hasTypedOM: false,
-    overshootStep: 0
+    content: null as HTMLElement | null, hasTypedOM: false
 };
 
 export const isCurrentlySwiping = () => SwipeState.isActive === 1;
@@ -100,20 +99,11 @@ const _updateVisuals = () => {
 
     // Resistência após ultrapassar a largura do swipe
     const absTx = tx < 0 ? -tx : tx;
-    const maxReveal = SwipeState.actionWidth;
+    const maxReveal = SwipeState.actionWidth * 1.2;
     if (absTx > maxReveal) {
         const over = absTx - maxReveal;
-        const resisted = maxReveal + over * 0.2;
+        const resisted = maxReveal + over * 0.35;
         tx = (tx < 0 ? -resisted : resisted) | 0;
-
-        const stepSize = SwipeState.actionWidth * 0.2;
-        const step = Math.floor(over / stepSize);
-        if (step > SwipeState.overshootStep) {
-            triggerHaptic(step >= 3 ? 'heavy' : 'medium');
-            SwipeState.overshootStep = step;
-        }
-    } else if (SwipeState.overshootStep) {
-        SwipeState.overshootStep = 0;
     }
 
     // BLEEDING-EDGE PERF (CSS Typed OM): No "hot path" do gesto de swipe,
@@ -130,7 +120,6 @@ const _updateVisuals = () => {
         triggerHaptic('selection'); SwipeState.hasHaptics = 1;
     } else if (SwipeState.hasHaptics && absX < HAPTIC_THRESHOLD) {
         SwipeState.hasHaptics = 0;
-        SwipeState.overshootStep = 0;
     }
     SwipeState.rafId = 0;
 };
@@ -155,7 +144,6 @@ const _reset = () => {
     window.removeEventListener('pointercancel', _reset);
     SwipeState.card = SwipeState.content = null;
     SwipeState.isActive = 0; SwipeState.direction = DIR_NONE; SwipeState.pointerId = -1;
-    SwipeState.overshootStep = 0;
 };
 
 const _handlePointerMove = (e: PointerEvent) => {
