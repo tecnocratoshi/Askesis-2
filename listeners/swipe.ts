@@ -32,27 +32,16 @@ const INTENT_THRESHOLD = SWIPE_INTENT_THRESHOLD;
 const ACTION_THRESHOLD = SWIPE_ACTION_THRESHOLD;
 const HAPTIC_THRESHOLD = SWIPE_HAPTIC_THRESHOLD;
 
-// PHYSICS CONSTANTS: Resistência progressiva e haptic incremental
-const MAX_OVERSWIPE = 100;      // Máximo overswipe permitido em pixels
-const RESISTANCE_FACTOR = 0.4; // Fator de resistência após limite (0-1, menor = mais resistência)
-const HAPTIC_ZONES = [0.5, 0.75, 0.9, 1.0]; // Zonas de haptic progressivo (% do limite)
-const SAFETY_TIMEOUT_MS = 3000; // Timeout de segurança para limpar estado residual
-
 const SwipeState = {
     isActive: 0, startX: 0, startY: 0, currentX: 0, direction: DIR_NONE,
     wasOpenLeft: 0, wasOpenRight: 0, actionWidth: 60, pointerId: -1,
     rafId: 0, hasHaptics: 0, card: null as HTMLElement | null,
     content: null as HTMLElement | null, hasTypedOM: false,
-    hapticZoneIndex: 0,         // Zona atual de haptic (para incremental)
-    lastVisualX: 0,             // Última posição visual aplicada
-    safetyTimeoutId: 0          // Timeout de segurança
+    overshootStep: 0,
+    origTransition: '' as string | null
 };
 
 export const isCurrentlySwiping = () => SwipeState.isActive === 1;
-export const isSwipePending = () => SwipeState.card !== null;
-export const cancelSwipeInteraction = () => {
-    if (SwipeState.card) _reset();
-};
 
 function updateCachedLayoutValues() {
     const root = getComputedStyle(document.documentElement);
@@ -60,22 +49,38 @@ function updateCachedLayoutValues() {
     SwipeState.hasTypedOM = typeof window !== 'undefined' && !!(window.CSS && (window as any).CSSTranslate && CSS.px);
 }
 
-function _finalizeSwipeState(deltaX: number) {
+function _finalizeSwipeState(deltaX: number): boolean {
     const { card, wasOpenLeft, wasOpenRight } = SwipeState;
-    if (!card) return;
+    if (!card) return false;
+    let didChange = false;
 
     if (wasOpenLeft) {
-        if (deltaX < -ACTION_THRESHOLD) card.classList.remove(CSS_CLASSES.IS_OPEN_LEFT);
+        if (deltaX < -ACTION_THRESHOLD) {
+            card.classList.remove(CSS_CLASSES.IS_OPEN_LEFT);
+            didChange = true;
+        }
     } else if (wasOpenRight) {
-        if (deltaX > ACTION_THRESHOLD) card.classList.remove(CSS_CLASSES.IS_OPEN_RIGHT);
+        if (deltaX > ACTION_THRESHOLD) {
+            card.classList.remove(CSS_CLASSES.IS_OPEN_RIGHT);
+            didChange = true;
+        }
     } else {
-        if (deltaX > ACTION_THRESHOLD) card.classList.add(CSS_CLASSES.IS_OPEN_LEFT);
-        else if (deltaX < -ACTION_THRESHOLD) card.classList.add(CSS_CLASSES.IS_OPEN_RIGHT);
+        if (deltaX > ACTION_THRESHOLD) {
+            card.classList.add(CSS_CLASSES.IS_OPEN_LEFT);
+            didChange = true;
+        } else if (deltaX < -ACTION_THRESHOLD) {
+            card.classList.add(CSS_CLASSES.IS_OPEN_RIGHT);
+            didChange = true;
+        }
     }
+
+    return didChange;
 }
 
 function _blockSubsequentClick(deltaX: number) {
-    if ((deltaX < 0 ? -deltaX : deltaX) <= ACTION_THRESHOLD) return;
+    const abs = deltaX < 0 ? -deltaX : deltaX;
+    const threshold = Math.max(ACTION_THRESHOLD, SwipeState.actionWidth);
+    if (abs <= threshold) return;
     const block = (e: MouseEvent) => {
         const t = e.target as HTMLElement;
         if (!t.closest(DOM_SELECTORS.SWIPE_DELETE_BTN) && !t.closest(DOM_SELECTORS.SWIPE_NOTE_BTN)) {
@@ -87,67 +92,34 @@ function _blockSubsequentClick(deltaX: number) {
     setTimeout(() => window.removeEventListener('click', block, true), SWIPE_BLOCK_CLICK_MS);
 }
 
-/**
- * Aplica resistência progressiva ao movimento de swipe.
- * Quando o usuário arrasta além do actionWidth, a resistência aumenta
- * exponencialmente, criando uma sensação de "borracha" realista.
- */
-function _applyResistance(rawDelta: number, actionWidth: number): number {
-    const absDelta = Math.abs(rawDelta);
-    const sign = rawDelta >= 0 ? 1 : -1;
-    
-    // Dentro do limite normal: movimento 1:1 com o dedo
-    if (absDelta <= actionWidth) {
-        return rawDelta;
-    }
-    
-    // Além do limite: resistência progressiva (diminui conforme avança)
-    const overAmount = absDelta - actionWidth;
-    const maxOver = MAX_OVERSWIPE;
-    
-    // Função de easing: quanto mais longe, maior a resistência
-    // Usa raiz quadrada para desacelerar gradualmente
-    const resistedOver = maxOver * (1 - Math.exp(-overAmount / (maxOver * RESISTANCE_FACTOR)));
-    
-    return sign * (actionWidth + resistedOver);
-}
-
-/**
- * Haptic feedback progressivo baseado em zonas.
- * Dispara feedback cada vez que cruza uma zona, com intensidade crescente.
- */
-function _triggerProgressiveHaptic(progress: number) {
-    // progress: 0-1+ (pode passar de 1 quando em overswipe)
-    const clampedProgress = Math.min(progress, 1);
-    
-    for (let i = SwipeState.hapticZoneIndex; i < HAPTIC_ZONES.length; i++) {
-        if (clampedProgress >= HAPTIC_ZONES[i]) {
-            // Intensidade crescente por zona
-            const intensity: 'light' | 'medium' | 'heavy' = 
-                i < 2 ? 'light' : i < 3 ? 'medium' : 'heavy';
-            triggerHaptic(intensity);
-            SwipeState.hapticZoneIndex = i + 1;
-        }
-    }
-    
-    // Reset das zonas se voltar para trás
-    if (clampedProgress < HAPTIC_ZONES[0] && SwipeState.hapticZoneIndex > 0) {
-        SwipeState.hapticZoneIndex = 0;
-    }
-}
-
 const _updateVisuals = () => {
     if (!SwipeState.card || !SwipeState.content || SwipeState.direction !== DIR_HORIZ) {
         SwipeState.rafId = 0; return;
     }
 
-    let rawDelta = (SwipeState.currentX - SwipeState.startX) | 0;
-    if (SwipeState.wasOpenLeft) rawDelta += SwipeState.actionWidth;
-    if (SwipeState.wasOpenRight) rawDelta -= SwipeState.actionWidth;
+    let tx = (SwipeState.currentX - SwipeState.startX) | 0;
+    if (SwipeState.wasOpenLeft) tx += SwipeState.actionWidth;
+    if (SwipeState.wasOpenRight) tx -= SwipeState.actionWidth;
 
-    // Aplica resistência progressiva para movimento realista
-    const tx = _applyResistance(rawDelta, SwipeState.actionWidth) | 0;
-    SwipeState.lastVisualX = tx;
+    // Resistência após ultrapassar a largura do swipe
+    const absTx = tx < 0 ? -tx : tx;
+    const maxReveal = SwipeState.actionWidth;
+    if (absTx > maxReveal) {
+        const over = absTx - maxReveal;
+        const resisted = maxReveal + (over * 0.08) / (1 + (over / (maxReveal * 1.2)));
+        tx = (tx < 0 ? -resisted : resisted) | 0;
+
+        const stepSize = SwipeState.actionWidth * 0.08;
+        const step = Math.floor(over / stepSize);
+        if (step > SwipeState.overshootStep) {
+            if (step >= 4) triggerHaptic('heavy');
+            else if (step === 3) triggerHaptic('medium');
+            else triggerHaptic('light');
+            SwipeState.overshootStep = step;
+        }
+    } else if (SwipeState.overshootStep) {
+        SwipeState.overshootStep = 0;
+    }
 
     // BLEEDING-EDGE PERF (CSS Typed OM): No "hot path" do gesto de swipe,
     // atualizamos o `transform` diretamente no motor de composição do navegador
@@ -155,43 +127,41 @@ const _updateVisuals = () => {
     if (SwipeState.hasTypedOM && SwipeState.content.attributeStyleMap) {
         SwipeState.content.attributeStyleMap.set('transform', new (window as any).CSSTranslate(CSS.px(tx), CSS.px(0)));
     } else {
+        if (SwipeState.content) SwipeState.content.style.transition = 'none';
         SwipeState.content.style.transform = `translateX(${tx}px)`;
     }
-
-    // Haptic progressivo baseado no progresso em direção ao limite
-    const absRaw = Math.abs(rawDelta);
-    const progress = absRaw / SwipeState.actionWidth;
-    _triggerProgressiveHaptic(progress);
 
     SwipeState.rafId = 0;
 };
 
 const _reset = () => {
-    // Limpa timeout de segurança primeiro
-    if (SwipeState.safetyTimeoutId) {
-        clearTimeout(SwipeState.safetyTimeoutId);
-        SwipeState.safetyTimeoutId = 0;
-    }
     if (SwipeState.rafId) cancelAnimationFrame(SwipeState.rafId);
     const { card, content, pointerId } = SwipeState;
     if (card) {
         if (pointerId !== -1) try { card.releasePointerCapture(pointerId); } catch(e){}
         card.classList.remove(CSS_CLASSES.IS_SWIPING);
         if (content) {
+            if (SwipeState.origTransition !== null) {
+                content.style.transition = SwipeState.origTransition;
+            }
             if (SwipeState.hasTypedOM && content.attributeStyleMap) content.attributeStyleMap.clear();
             else content.style.transform = '';
             content.draggable = true;
         }
     }
-    document.body.classList.remove('is-interaction-active', 'is-swipe-pending');
-    if (state.uiDirtyState.habitListStructure) requestAnimationFrame(() => renderApp());
+    SwipeState.origTransition = null;
+    document.body.classList.remove('is-interaction-active');
+    document.body.classList.remove('is-swiping-active');
+    if (state.uiDirtyState.habitListStructure || state.uiDirtyState.calendarVisuals) {
+        requestAnimationFrame(() => renderApp());
+    }
     
     window.removeEventListener('pointermove', _handlePointerMove);
     window.removeEventListener('pointerup', _handlePointerUp);
     window.removeEventListener('pointercancel', _reset);
     SwipeState.card = SwipeState.content = null;
     SwipeState.isActive = 0; SwipeState.direction = DIR_NONE; SwipeState.pointerId = -1;
-    SwipeState.hapticZoneIndex = 0; SwipeState.lastVisualX = 0; // Reset physics state
+    SwipeState.overshootStep = 0;
 };
 
 const _handlePointerMove = (e: PointerEvent) => {
@@ -209,8 +179,10 @@ const _handlePointerMove = (e: PointerEvent) => {
             if (dx > dy) {
                 // Horizontal swipe confirmed
                 SwipeState.direction = DIR_HORIZ;
+                SwipeState.startX = SwipeState.currentX;
                 SwipeState.isActive = 1;
                 document.body.classList.add('is-interaction-active');
+                document.body.classList.add('is-swiping-active');
                 SwipeState.card.classList.add(CSS_CLASSES.IS_SWIPING);
                 if (SwipeState.content) SwipeState.content.draggable = false;
                 try { SwipeState.card.setPointerCapture(e.pointerId); SwipeState.pointerId = e.pointerId; } catch(e) {}
@@ -226,6 +198,16 @@ const _handlePointerMove = (e: PointerEvent) => {
     // Process horizontal swipe
     if (SwipeState.direction === DIR_HORIZ) {
         e.preventDefault(); // GESTURE LOCK: Previne scroll vertical do navegador
+        let dx = (SwipeState.currentX - SwipeState.startX) | 0;
+        if (SwipeState.wasOpenLeft) dx += SwipeState.actionWidth;
+        if (SwipeState.wasOpenRight) dx -= SwipeState.actionWidth;
+        const absX = dx < 0 ? -dx : dx;
+        if (!SwipeState.hasHaptics && absX > HAPTIC_THRESHOLD) {
+            triggerHaptic('selection'); SwipeState.hasHaptics = 1;
+        } else if (SwipeState.hasHaptics && absX < HAPTIC_THRESHOLD) {
+            SwipeState.hasHaptics = 0;
+            SwipeState.overshootStep = 0;
+        }
         if (!SwipeState.rafId) {
             SwipeState.rafId = requestAnimationFrame(_updateVisuals);
         }
@@ -235,7 +217,10 @@ const _handlePointerMove = (e: PointerEvent) => {
 const _handlePointerUp = () => {
     if (SwipeState.card && SwipeState.direction === DIR_HORIZ) {
         const dx = (SwipeState.currentX - SwipeState.startX) | 0;
-        _finalizeSwipeState(dx); _blockSubsequentClick(dx);
+        const threshold = Math.max(ACTION_THRESHOLD, SwipeState.actionWidth * 0.55);
+        const didChange = _finalizeSwipeState(dx > 0 ? threshold <= dx ? dx : 0 : threshold <= -dx ? dx : 0);
+        if (didChange) triggerHaptic('light');
+        _blockSubsequentClick(dx);
     }
     _reset();
 };
@@ -243,12 +228,8 @@ const _handlePointerUp = () => {
 export function setupSwipeHandler(container: HTMLElement) {
     updateCachedLayoutValues();
     container.addEventListener('pointerdown', (e) => {
-        // ROBUSTNESS: Se ainda há estado residual, limpa forçadamente
-        if (SwipeState.card) {
-            _reset();
-        }
-        
-        if (e.button !== 0) return;
+        if (SwipeState.card || e.button !== 0) return;
+        if (document.body.classList.contains('is-dragging-active')) return;
         const cw = (e.target as HTMLElement).closest<HTMLElement>(DOM_SELECTORS.HABIT_CONTENT_WRAPPER);
         const card = cw?.closest<HTMLElement>(DOM_SELECTORS.HABIT_CARD);
         if (!card || !cw) return;
@@ -262,19 +243,14 @@ export function setupSwipeHandler(container: HTMLElement) {
         SwipeState.wasOpenLeft = card.classList.contains(CSS_CLASSES.IS_OPEN_LEFT) ? 1 : 0;
         SwipeState.wasOpenRight = card.classList.contains(CSS_CLASSES.IS_OPEN_RIGHT) ? 1 : 0;
         SwipeState.hasHaptics = 0;
-        SwipeState.hapticZoneIndex = 0;
-        
-        // EARLY LOCK: Marca o body como "potencialmente em interação" para prevenir
-        // que clicks rápidos durante a detecção de intenção causem re-renders destrutivos.
-        document.body.classList.add('is-swipe-pending');
-        
-        // SAFETY TIMEOUT: Se por algum motivo o pointerup/cancel não for disparado,
-        // limpa o estado após 3 segundos para evitar travamento
-        SwipeState.safetyTimeoutId = window.setTimeout(() => {
-            if (SwipeState.card) {
-                _reset();
-            }
-        }, SAFETY_TIMEOUT_MS);
+
+        // Preparar para swipe imediato: desativa drag e transições desde o início
+        card.classList.add(CSS_CLASSES.IS_SWIPING);
+        SwipeState.origTransition = cw.style.transition;
+        cw.style.transition = 'none';
+        cw.draggable = false;
+        document.body.classList.add('is-interaction-active');
+        document.body.classList.add('is-swiping-active');
 
         window.addEventListener('pointermove', _handlePointerMove, { passive: false });
         window.addEventListener('pointerup', _handlePointerUp);

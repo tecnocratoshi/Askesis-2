@@ -16,7 +16,6 @@ import { openNotesModal, renderExploreHabits, openModal } from '../render';
 import { toggleHabitStatus, setGoalOverride, requestHabitTimeRemoval, requestHabitEndingFromModal } from '../services/habitActions';
 import { triggerHaptic } from '../utils';
 import { DOM_SELECTORS, CSS_CLASSES } from '../render/constants';
-import { isCurrentlySwiping, isSwipePending } from './swipe';
 
 const GOAL_STEP = 5, MAX_GOAL = 9999;
 const SELECTOR = `${DOM_SELECTORS.HABIT_CONTENT_WRAPPER}, ${DOM_SELECTORS.GOAL_CONTROL_BTN}, ${DOM_SELECTORS.GOAL_VALUE_WRAPPER}, ${DOM_SELECTORS.SWIPE_DELETE_BTN}, ${DOM_SELECTORS.SWIPE_NOTE_BTN}, ${DOM_SELECTORS.EMPTY_GROUP_PLACEHOLDER}`;
@@ -90,17 +89,6 @@ const _handleGoalInput = (wrapper: HTMLElement, hId: string, time: TimeOfDay) =>
 };
 
 const _handleContainerClick = (e: MouseEvent) => {
-    // GESTURE ISOLATION: Não processa clicks durante swipe/drag ativo ou pendente
-    // Isso evita que o tap interfira com swipe/drag após algum tempo de uso
-    if (
-        isCurrentlySwiping() ||
-        isSwipePending() ||
-        document.body.classList.contains('is-dragging-active') ||
-        document.body.classList.contains('is-interaction-active')
-    ) {
-        return;
-    }
-    
     const el = (e.target as HTMLElement).closest<HTMLElement>(SELECTOR);
     if (!el) return;
 
