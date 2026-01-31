@@ -67,9 +67,16 @@ main {
 /* CHAOS FIX: GLOBAL INTERACTION LOCK
    Desabilita smooth scrolling e eventos de ponteiro não essenciais quando uma interação física
    (Swipe, Drag, Rotary) está ativa. Isso evita conflitos de thread e garante 60fps. */
-body.is-interaction-active * {
+body.is-interaction-active *,
+body.is-swipe-pending * {
     scroll-behavior: auto !important;
     /* Opcional: pointer-events: none para elementos não focados, mas pode ser agressivo demais. */
+}
+
+/* GESTURE ISOLATION: Previne que clicks acidentais durante detecção de swipe ativem botões.
+   Não afeta o próprio cartão sendo manipulado. */
+body.is-swipe-pending .habit-card:not(.is-swiping) .goal-control-btn {
+    pointer-events: none;
 }
 
 /* Permitir seleção em campos de texto e conteúdo onde é útil */

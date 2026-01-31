@@ -36,6 +36,7 @@ const HAPTIC_THRESHOLD = SWIPE_HAPTIC_THRESHOLD;
 const MAX_OVERSWIPE = 100;      // Máximo overswipe permitido em pixels
 const RESISTANCE_FACTOR = 0.4; // Fator de resistência após limite (0-1, menor = mais resistência)
 const HAPTIC_ZONES = [0.5, 0.75, 0.9, 1.0]; // Zonas de haptic progressivo (% do limite)
+const SAFETY_TIMEOUT_MS = 3000; // Timeout de segurança para limpar estado residual
 
 const SwipeState = {
     isActive: 0, startX: 0, startY: 0, currentX: 0, direction: DIR_NONE,
@@ -43,10 +44,12 @@ const SwipeState = {
     rafId: 0, hasHaptics: 0, card: null as HTMLElement | null,
     content: null as HTMLElement | null, hasTypedOM: false,
     hapticZoneIndex: 0,         // Zona atual de haptic (para incremental)
-    lastVisualX: 0              // Última posição visual aplicada
+    lastVisualX: 0,             // Última posição visual aplicada
+    safetyTimeoutId: 0          // Timeout de segurança
 };
 
 export const isCurrentlySwiping = () => SwipeState.isActive === 1;
+export const isSwipePending = () => SwipeState.card !== null;
 
 function updateCachedLayoutValues() {
     const root = getComputedStyle(document.documentElement);
@@ -161,6 +164,11 @@ const _updateVisuals = () => {
 };
 
 const _reset = () => {
+    // Limpa timeout de segurança primeiro
+    if (SwipeState.safetyTimeoutId) {
+        clearTimeout(SwipeState.safetyTimeoutId);
+        SwipeState.safetyTimeoutId = 0;
+    }
     if (SwipeState.rafId) cancelAnimationFrame(SwipeState.rafId);
     const { card, content, pointerId } = SwipeState;
     if (card) {
@@ -232,7 +240,12 @@ const _handlePointerUp = () => {
 export function setupSwipeHandler(container: HTMLElement) {
     updateCachedLayoutValues();
     container.addEventListener('pointerdown', (e) => {
-        if (SwipeState.card || e.button !== 0) return;
+        // ROBUSTNESS: Se ainda há estado residual, limpa forçadamente
+        if (SwipeState.card) {
+            _reset();
+        }
+        
+        if (e.button !== 0) return;
         const cw = (e.target as HTMLElement).closest<HTMLElement>(DOM_SELECTORS.HABIT_CONTENT_WRAPPER);
         const card = cw?.closest<HTMLElement>(DOM_SELECTORS.HABIT_CARD);
         if (!card || !cw) return;
@@ -246,10 +259,19 @@ export function setupSwipeHandler(container: HTMLElement) {
         SwipeState.wasOpenLeft = card.classList.contains(CSS_CLASSES.IS_OPEN_LEFT) ? 1 : 0;
         SwipeState.wasOpenRight = card.classList.contains(CSS_CLASSES.IS_OPEN_RIGHT) ? 1 : 0;
         SwipeState.hasHaptics = 0;
+        SwipeState.hapticZoneIndex = 0;
         
         // EARLY LOCK: Marca o body como "potencialmente em interação" para prevenir
         // que clicks rápidos durante a detecção de intenção causem re-renders destrutivos.
         document.body.classList.add('is-swipe-pending');
+        
+        // SAFETY TIMEOUT: Se por algum motivo o pointerup/cancel não for disparado,
+        // limpa o estado após 3 segundos para evitar travamento
+        SwipeState.safetyTimeoutId = window.setTimeout(() => {
+            if (SwipeState.card) {
+                _reset();
+            }
+        }, SAFETY_TIMEOUT_MS);
 
         window.addEventListener('pointermove', _handlePointerMove, { passive: false });
         window.addEventListener('pointerup', _handlePointerUp);
