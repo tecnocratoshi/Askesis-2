@@ -17,7 +17,7 @@ import { setupSwipeHandler } from './listeners/swipe';
 import { setupCalendarListeners } from './listeners/calendar';
 import { setupChartListeners } from './listeners/chart';
 import { pushToOneSignal, getTodayUTCIso, resetTodayCache, createDebounced, logger } from './utils';
-import { state, getPersistableState } from './state';
+import { state, getPersistableState, invalidateCachesForDateChange } from './state';
 import { syncStateWithCloud } from './services/cloud';
 import { checkAndAnalyzeDayContext } from './services/analysis';
 import { NETWORK_DEBOUNCE_MS, PERMISSION_DELAY_MS, INTERACTION_DELAY_MS } from './constants';
@@ -93,7 +93,9 @@ const _handleCardUpdate = (e: Event) => {
         const shouldAnimate = e.type === 'card-status-changed';
         updateHabitCardElement(cardElement, habit, time, undefined, { animate: shouldAnimate });
     }
-    updateDayVisuals(date || state.selectedDate);
+    const targetDate = date || state.selectedDate;
+    invalidateCachesForDateChange(targetDate, [habitId]);
+    updateDayVisuals(targetDate);
 };
 
 export function setupEventListeners() {
